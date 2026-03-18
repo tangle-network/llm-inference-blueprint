@@ -2,7 +2,6 @@
 pragma solidity ^0.8.26;
 
 import { EnumerableSet } from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
-import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 // In production, import from tnt-core's npm/soldeer package:
 // import { BlueprintServiceManagerBase } from "tnt-core/BlueprintServiceManagerBase.sol";
@@ -175,13 +174,21 @@ contract InferenceBSM is IBlueprintServiceManager {
     // ═══════════════════════════════════════════════════════════════════════
 
     modifier onlyFromTangle() {
-        if (msg.sender != tangleCore) revert OnlyTangleAllowed(msg.sender, tangleCore);
+        _onlyFromTangle();
         _;
     }
 
     modifier onlyBlueprintOwner() {
-        if (msg.sender != blueprintOwner) revert OnlyBlueprintOwnerAllowed(msg.sender, blueprintOwner);
+        _onlyBlueprintOwner();
         _;
+    }
+
+    function _onlyFromTangle() internal view {
+        if (msg.sender != tangleCore) revert OnlyTangleAllowed(msg.sender, tangleCore);
+    }
+
+    function _onlyBlueprintOwner() internal view {
+        if (msg.sender != blueprintOwner) revert OnlyBlueprintOwnerAllowed(msg.sender, blueprintOwner);
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -330,7 +337,7 @@ contract InferenceBSM is IBlueprintServiceManager {
 
     function onOperatorJoined(uint64, address, uint16) external onlyFromTangle {}
 
-    function canLeave(uint64, address) external view returns (bool) {
+    function canLeave(uint64, address) external pure returns (bool) {
         return true;
     }
 
