@@ -1,0 +1,11 @@
+{
+  "summary": "Repair the issues identified during validation.",
+  "actions": [
+    "Resolve critical finding: verify_spend_auth_signature recovers signer key but never checks identity",
+    "Resolve high finding: authorize_and_claim ignores actual_amount, always claims full authorized amount",
+    "Resolve medium finding: run_inference job handler uses expect() instead of error propagation",
+    "Resolve low finding: Streaming requests silently downgraded to non-streaming",
+    "Resolve low finding: Billing cost tests don't exercise BillingClient.calculate_cost directly",
+    "Resolve low finding: No test for verify_spend_auth_signature with tampered data"
+  ]
+}

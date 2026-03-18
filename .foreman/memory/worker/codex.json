@@ -1,0 +1,9 @@
+{
+  "workerId": "codex",
+  "sampleCount": 1,
+  "successRate": 0,
+  "commonFailureClasses": [
+    "CorsLayer::permissive() in production HTTP server",
+    "VLLM_MODEL_NAME fallback inconsistent with VLLM_BASE_URL/VLLM_CLIENT error handling"
+  ]
+}
