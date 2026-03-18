@@ -31,6 +31,10 @@ static VLLM_MODEL_NAME: OnceLock<String> = OnceLock::new();
 /// Shared HTTP client for on-chain job handler, initialized once during startup.
 static VLLM_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 
+/// Signaled after vLLM passes its readiness health check. Prevents the job
+/// handler from sending requests before the subprocess is ready.
+static VLLM_READY: OnceLock<()> = OnceLock::new();
+
 // ─── ABI types for on-chain job encoding ─────────────────────────────────
 
 sol! {
@@ -99,10 +103,28 @@ pub async fn run_inference(
             });
         }
     };
-    let model_name = VLLM_MODEL_NAME
-        .get()
-        .map(|s| s.as_str())
-        .unwrap_or("default");
+
+    let model_name = match VLLM_MODEL_NAME.get() {
+        Some(name) => name.as_str(),
+        None => {
+            tracing::error!("VLLM_MODEL_NAME not initialized — InferenceServer must start first");
+            return TangleResult(InferenceResult {
+                text: "error: model name not initialized".to_string(),
+                promptTokens: 0,
+                completionTokens: 0,
+            });
+        }
+    };
+
+    // Reject jobs that arrive before vLLM has passed its readiness health check
+    if VLLM_READY.get().is_none() {
+        tracing::warn!("vLLM subprocess is still starting up — rejecting job");
+        return TangleResult(InferenceResult {
+            text: "error: vLLM is not ready yet".to_string(),
+            promptTokens: 0,
+            completionTokens: 0,
+        });
+    }
 
     let vllm_body = serde_json::json!({
         "model": model_name,
@@ -205,6 +227,7 @@ impl BackgroundService for InferenceServer {
                 let _ = tx.send(Err(RunnerError::Other(e.to_string().into())));
                 return;
             }
+            let _ = VLLM_READY.set(());
             tracing::info!("vLLM is ready");
 
             // 2. Build billing client

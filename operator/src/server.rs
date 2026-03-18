@@ -338,7 +338,16 @@ async fn chat_completions(
                 .authorize_and_claim(&spend_auth, actual_cost)
                 .await
             {
-                tracing::warn!(error = %e, "billing claim failed (inference already served)");
+                // Log at error with full audit context — the operator served inference
+                // but failed to collect payment. This requires manual investigation.
+                tracing::error!(
+                    error = %e,
+                    commitment = %spend_auth.commitment,
+                    authorized_amount = %spend_auth.amount,
+                    actual_cost = actual_cost,
+                    nonce = spend_auth.nonce,
+                    "billing claim failed after serving inference — operator revenue lost"
+                );
             }
         }
     }
