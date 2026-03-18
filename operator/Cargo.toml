@@ -1,0 +1,44 @@
+[package]
+name = "vllm-inference"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "vllm_inference"
+path = "src/lib.rs"
+
+[[bin]]
+name = "vllm-operator"
+path = "src/main.rs"
+
+[dependencies]
+blueprint-sdk = { workspace = true }
+alloy = { workspace = true }
+alloy-sol-types = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+reqwest = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+hex = { workspace = true }
+k256 = { workspace = true }
+
+# Web framework (for OpenAI-compatible HTTP server)
+axum = { version = "0.7", features = ["json", "macros"] }
+tower-http = { version = "0.5", features = ["cors", "trace"] }
+
+# Config
+config = "0.14"
+dotenvy = "0.15"
+
+# Misc
+bytes = "1"
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+blueprint-sdk = { version = "0.1.0-alpha.22", features = ["testing", "tangle"] }
+blueprint-anvil-testing-utils = { version = "0.1.0-alpha.21" }

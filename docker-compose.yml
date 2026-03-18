@@ -1,0 +1,32 @@
+services:
+  operator:
+    build:
+      context: .
+      dockerfile: operator/Dockerfile
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./deploy/config.example.json:/home/operator/config.json:ro
+      - huggingface-cache:/home/operator/.cache/huggingface
+    environment:
+      - VLLM_OP_CONFIG=/home/operator/config.json
+      - VLLM_OP_TANGLE__OPERATOR_KEY=${OPERATOR_KEY}
+      - HF_TOKEN=${HF_TOKEN}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped
+
+  # Local Anvil chain for development
+  anvil:
+    image: ghcr.io/foundry-rs/foundry:latest
+    entrypoint: ["anvil", "--host", "0.0.0.0", "--chain-id", "31337"]
+    ports:
+      - "8545:8545"
+
+volumes:
+  huggingface-cache:

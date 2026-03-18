@@ -1,0 +1,13 @@
+target/
+node_modules/
+dist/
+out/
+cache/
+contracts/out/
+contracts/cache/
+contracts/dependencies/
+*.env
+*.env.*
+!.env.example
+.DS_Store
+Cargo.lock
