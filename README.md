@@ -1,3 +1,5 @@
+![Tangle Network Banner](https://raw.githubusercontent.com/tangle-network/tangle/refs/heads/main/assets/Tangle%20%20Banner.png)
+
 # vLLM Inference Blueprint for Tangle
 
 A Tangle Blueprint that enables operators to serve LLM inference via [vLLM](https://github.com/vllm-project/vllm), with anonymous payment through the ShieldedCredits system.
