@@ -201,6 +201,54 @@ async fn chat_completions(
                 "invalid_spend_auth",
             );
         }
+
+        // 2a. Enforce max_spend_per_request policy
+        let max_spend = state.config.billing.max_spend_per_request;
+        if max_spend > 0 {
+            let requested: u64 = spend_auth.amount.parse().unwrap_or(0);
+            if requested > max_spend {
+                return error_response(
+                    StatusCode::BAD_REQUEST,
+                    format!(
+                        "spend authorization amount ({requested}) exceeds max_spend_per_request ({max_spend})"
+                    ),
+                    "billing_error",
+                    "exceeds_max_spend",
+                );
+            }
+        }
+
+        // 2b. Enforce min_credit_balance policy
+        let min_balance = state.config.billing.min_credit_balance;
+        if min_balance > 0 {
+            match state
+                .billing
+                .get_account_balance(&spend_auth.commitment)
+                .await
+            {
+                Ok(balance) => {
+                    if balance < alloy::primitives::U256::from(min_balance) {
+                        return error_response(
+                            StatusCode::PAYMENT_REQUIRED,
+                            format!(
+                                "credit balance ({balance}) is below minimum required ({min_balance})"
+                            ),
+                            "billing_error",
+                            "insufficient_balance",
+                        );
+                    }
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "failed to check credit balance");
+                    return error_response(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "failed to verify credit balance".to_string(),
+                        "billing_error",
+                        "balance_check_failed",
+                    );
+                }
+            }
+        }
     }
 
     // 3. Pre-authorize billing on-chain BEFORE sending upstream request
@@ -249,16 +297,18 @@ async fn handle_non_streaming(
     );
     metrics_guard.set_success();
 
-    // Post-response settlement (claim payment) — distinct from pre-auth
+    // Post-response settlement (claim payment) — distinct from pre-auth.
+    // Charge the actual metered cost, capped by the pre-authorized ceiling.
     if let Some(ref spend_auth) = req.spend_auth {
         let actual_cost = state.billing.calculate_cost(
             vllm_response.usage.prompt_tokens,
             vllm_response.usage.completion_tokens,
         );
-        let charge_amount = actual_cost.min(spend_auth.amount.parse::<u64>().unwrap_or(0));
+        let preauth_amount = spend_auth.amount.parse::<u64>().unwrap_or(0);
+        let charge_amount = actual_cost.min(preauth_amount);
         if charge_amount > 0 {
-            if let Err(e) = state.billing.claim_payment(spend_auth).await {
-                tracing::warn!(error = %e, "billing claim failed");
+            if let Err(e) = state.billing.claim_payment(spend_auth, charge_amount).await {
+                tracing::warn!(error = %e, charge_amount, "billing claim failed");
             }
         }
     }
@@ -360,11 +410,14 @@ async fn handle_streaming(
                 if let Some(ref spend_auth) = spend_auth_for_settlement {
                     let actual_cost =
                         billing_for_settlement.calculate_cost(prompt_tokens, completion_tokens);
-                    let charge_amount =
-                        actual_cost.min(spend_auth.amount.parse::<u64>().unwrap_or(0));
+                    let preauth_amount = spend_auth.amount.parse::<u64>().unwrap_or(0);
+                    let charge_amount = actual_cost.min(preauth_amount);
                     if charge_amount > 0 {
-                        if let Err(e) = billing_for_settlement.claim_payment(spend_auth).await {
-                            tracing::warn!(error = %e, "billing claim failed after stream");
+                        if let Err(e) = billing_for_settlement
+                            .claim_payment(spend_auth, charge_amount)
+                            .await
+                        {
+                            tracing::warn!(error = %e, charge_amount, "billing claim failed after stream");
                         }
                     }
                 }

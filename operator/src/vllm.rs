@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 
@@ -65,8 +66,29 @@ impl VllmProcess {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
 
-        let child = cmd.spawn()?;
+        let mut child = cmd.spawn()?;
         tracing::info!(pid = child.id(), url = %vllm_url, "spawned vLLM process");
+
+        // Drain stdout and stderr asynchronously so the OS pipe buffer never
+        // fills up and blocks the child process.
+        if let Some(stdout) = child.stdout.take() {
+            tokio::spawn(async move {
+                let reader = BufReader::new(stdout);
+                let mut lines = reader.lines();
+                while let Ok(Some(line)) = lines.next_line().await {
+                    tracing::info!(target: "vllm::stdout", "{}", line);
+                }
+            });
+        }
+        if let Some(stderr) = child.stderr.take() {
+            tokio::spawn(async move {
+                let reader = BufReader::new(stderr);
+                let mut lines = reader.lines();
+                while let Ok(Some(line)) = lines.next_line().await {
+                    tracing::warn!(target: "vllm::stderr", "{}", line);
+                }
+            });
+        }
 
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(300))

@@ -62,7 +62,7 @@ pub fn router() -> Router {
 #[debug_job]
 pub async fn run_inference(
     TangleArg(request): TangleArg<InferenceRequest>,
-) -> TangleResult<InferenceResult> {
+) -> Result<TangleResult<InferenceResult>, RunnerError> {
     let temperature = request.temperature as f32 / 1000.0;
     let max_tokens = request.maxTokens;
 
@@ -80,9 +80,15 @@ pub async fn run_inference(
         .json(&vllm_body)
         .send()
         .await
-        .expect("vLLM request failed");
+        .map_err(|e| {
+            tracing::error!(error = %e, "vLLM request failed");
+            RunnerError::Other(format!("vLLM request failed: {e}").into())
+        })?;
 
-    let body: serde_json::Value = resp.json().await.expect("vLLM response parse failed");
+    let body: serde_json::Value = resp.json().await.map_err(|e| {
+        tracing::error!(error = %e, "vLLM response parse failed");
+        RunnerError::Other(format!("vLLM response parse failed: {e}").into())
+    })?;
 
     let text = body["choices"][0]["message"]["content"]
         .as_str()
@@ -91,11 +97,11 @@ pub async fn run_inference(
     let prompt_tokens = body["usage"]["prompt_tokens"].as_u64().unwrap_or(0) as u32;
     let completion_tokens = body["usage"]["completion_tokens"].as_u64().unwrap_or(0) as u32;
 
-    TangleResult(InferenceResult {
+    Ok(TangleResult(InferenceResult {
         text,
         promptTokens: prompt_tokens,
         completionTokens: completion_tokens,
-    })
+    }))
 }
 
 // ─── Background service: HTTP server + vLLM subprocess ───────────────────

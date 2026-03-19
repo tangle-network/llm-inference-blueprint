@@ -128,9 +128,25 @@ impl BillingClient {
     }
 
     /// Claim payment on-chain after inference is served.
-    pub async fn claim_payment(&self, spend_auth: &SpendAuthPayload) -> anyhow::Result<()> {
+    ///
+    /// `actual_amount` is the metered cost derived from token usage and
+    /// configured pricing.  The on-chain contract currently settles the full
+    /// pre-authorized amount, but the operator records the actual cost for
+    /// auditing.  When the contract supports partial settlement, this value
+    /// will be forwarded on-chain.
+    pub async fn claim_payment(
+        &self,
+        spend_auth: &SpendAuthPayload,
+        actual_amount: u64,
+    ) -> anyhow::Result<()> {
         let auth_hash = Self::auth_hash(spend_auth)?;
         let operator: Address = spend_auth.operator.parse()?;
+
+        tracing::info!(
+            actual_amount = actual_amount,
+            preauth_amount = %spend_auth.amount,
+            "claiming payment (actual metered cost)"
+        );
 
         let provider = ProviderBuilder::new()
             .wallet(self.wallet.clone())
@@ -142,20 +158,33 @@ impl BillingClient {
         let receipt = pending.get_receipt().await?;
         tracing::info!(
             tx_hash = %receipt.transaction_hash,
+            actual_amount = actual_amount,
             "claimPayment confirmed"
         );
 
         Ok(())
     }
 
+    /// Query the on-chain balance for a ShieldedCredits account.
+    pub async fn get_account_balance(&self, commitment: &str) -> anyhow::Result<U256> {
+        let commitment: B256 = commitment.parse()?;
+
+        let provider = ProviderBuilder::new().connect_http(self.config.tangle.rpc_url.parse()?);
+
+        let contract = IShieldedCredits::new(self.shielded_credits, &provider);
+
+        let result = contract.getAccount(FixedBytes(commitment.0)).call().await?;
+        Ok(result.balance)
+    }
+
     /// Legacy combined method — authorize spend + claim payment in one call.
     pub async fn authorize_and_claim(
         &self,
         spend_auth: &SpendAuthPayload,
-        _actual_amount: u64,
+        actual_amount: u64,
     ) -> anyhow::Result<()> {
         self.authorize_spend(spend_auth).await?;
-        self.claim_payment(spend_auth).await?;
+        self.claim_payment(spend_auth, actual_amount).await?;
         Ok(())
     }
 }
