@@ -1,0 +1,23 @@
+{
+  "taskShape": "engineering",
+  "successfulPatterns": [
+    "validated-by: cargo fmt --all",
+    "validated-by: cargo fmt --all --check",
+    "validated-by: cargo clippy --workspace -- -D warnings",
+    "validated-by: cargo test --workspace",
+    "validated-by: cd /home/drew/code/vllm-inference-blueprint && cargo fmt --all -- --check"
+  ],
+  "badPatterns": [],
+  "repairRecipes": [
+    "repair: Check failed: [object Object]",
+    "repair: Check failed: cd /home/drew/code/vllm-inference-blueprint && cargo test --workspace",
+    "repair: Repository inspection is blocked by the runtime sandbox",
+    "repair: No success criterion could be verified",
+    "repair: Formatting, lint, and test gates are unproven",
+    "repair: Check failed: forge test",
+    "repair: Independent code inspection was impossible, so there is no trustworthy basis for approval",
+    "repair: Mandatory verification gates are not evidenced as passing",
+    "repair: Every major success criterion remains unverified",
+    "repair: Reported implementation surface is materially inconsistent with the requested scope"
+  ]
+}

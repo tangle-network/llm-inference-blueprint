@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use alloy::{
     network::EthereumWallet,
-    primitives::{Address, FixedBytes, B256, U256, keccak256},
+    primitives::{keccak256, Address, FixedBytes, B256, U256},
     providers::ProviderBuilder,
     signers::local::PrivateKeySigner,
     sol,
@@ -13,7 +13,6 @@ use crate::config::OperatorConfig;
 use crate::server::SpendAuthPayload;
 
 // Generate bindings for the ShieldedCredits contract.
-// In production, import from tnt-core's published bindings crate.
 sol! {
     #[sol(rpc)]
     interface IShieldedCredits {
@@ -68,12 +67,10 @@ impl BillingClient {
         input_cost + output_cost
     }
 
-    /// Submit authorizeSpend on-chain, then claimPayment.
-    pub async fn authorize_and_claim(
+    fn build_auth(
         &self,
         spend_auth: &SpendAuthPayload,
-        _actual_amount: u64,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<IShieldedCredits::SpendAuth> {
         let commitment: B256 = spend_auth.commitment.parse()?;
         let amount: U256 = spend_auth.amount.parse()?;
         let operator: Address = spend_auth.operator.parse()?;
@@ -84,7 +81,7 @@ impl BillingClient {
                 .unwrap_or(&spend_auth.signature),
         )?;
 
-        let auth = IShieldedCredits::SpendAuth {
+        Ok(IShieldedCredits::SpendAuth {
             commitment: FixedBytes(commitment.0),
             serviceId: spend_auth.service_id,
             jobIndex: spend_auth.job_index,
@@ -93,24 +90,12 @@ impl BillingClient {
             nonce: U256::from(spend_auth.nonce),
             expiry: spend_auth.expiry,
             signature: sig_bytes.into(),
-        };
+        })
+    }
 
-        let provider = ProviderBuilder::new()
-            .wallet(self.wallet.clone())
-            .connect_http(self.config.tangle.rpc_url.parse()?);
-
-        let contract = IShieldedCredits::new(self.shielded_credits, &provider);
-
-        // Step 1: authorizeSpend
-        let pending = contract.authorizeSpend(auth).send().await?;
-        let receipt = pending.get_receipt().await?;
-        tracing::info!(
-            tx_hash = %receipt.transaction_hash,
-            "authorizeSpend confirmed"
-        );
-
-        // Extract authHash: keccak256(abi.encode(commitment, serviceId, jobIndex, nonce))
-        let auth_hash = keccak256(
+    fn auth_hash(spend_auth: &SpendAuthPayload) -> anyhow::Result<FixedBytes<32>> {
+        let commitment: B256 = spend_auth.commitment.parse()?;
+        let hash = keccak256(
             (
                 FixedBytes::<32>(commitment.0),
                 U256::from(spend_auth.service_id),
@@ -119,18 +104,58 @@ impl BillingClient {
             )
                 .abi_encode(),
         );
+        Ok(FixedBytes(hash.0))
+    }
 
-        // Step 2: claimPayment
-        let pending2 = contract
-            .claimPayment(FixedBytes(auth_hash.0), operator)
-            .send()
-            .await?;
-        let receipt = pending2.get_receipt().await?;
+    /// Pre-authorize spending on-chain. Must be called before serving inference.
+    pub async fn authorize_spend(&self, spend_auth: &SpendAuthPayload) -> anyhow::Result<()> {
+        let auth = self.build_auth(spend_auth)?;
+
+        let provider = ProviderBuilder::new()
+            .wallet(self.wallet.clone())
+            .connect_http(self.config.tangle.rpc_url.parse()?);
+
+        let contract = IShieldedCredits::new(self.shielded_credits, &provider);
+
+        let pending = contract.authorizeSpend(auth).send().await?;
+        let receipt = pending.get_receipt().await?;
+        tracing::info!(
+            tx_hash = %receipt.transaction_hash,
+            "authorizeSpend confirmed"
+        );
+
+        Ok(())
+    }
+
+    /// Claim payment on-chain after inference is served.
+    pub async fn claim_payment(&self, spend_auth: &SpendAuthPayload) -> anyhow::Result<()> {
+        let auth_hash = Self::auth_hash(spend_auth)?;
+        let operator: Address = spend_auth.operator.parse()?;
+
+        let provider = ProviderBuilder::new()
+            .wallet(self.wallet.clone())
+            .connect_http(self.config.tangle.rpc_url.parse()?);
+
+        let contract = IShieldedCredits::new(self.shielded_credits, &provider);
+
+        let pending = contract.claimPayment(auth_hash, operator).send().await?;
+        let receipt = pending.get_receipt().await?;
         tracing::info!(
             tx_hash = %receipt.transaction_hash,
             "claimPayment confirmed"
         );
 
+        Ok(())
+    }
+
+    /// Legacy combined method — authorize spend + claim payment in one call.
+    pub async fn authorize_and_claim(
+        &self,
+        spend_auth: &SpendAuthPayload,
+        _actual_amount: u64,
+    ) -> anyhow::Result<()> {
+        self.authorize_spend(spend_auth).await?;
+        self.claim_payment(spend_auth).await?;
         Ok(())
     }
 }
@@ -144,7 +169,6 @@ pub fn verify_spend_auth_signature(
 ) -> bool {
     use k256::ecdsa::{RecoveryId, Signature, VerifyingKey};
 
-    // Reconstruct EIP-712 domain separator
     let domain_separator = keccak256(
         (
             keccak256(
@@ -160,7 +184,6 @@ pub fn verify_spend_auth_signature(
             .abi_encode(),
     );
 
-    // Reconstruct struct hash
     let spend_typehash = keccak256(
         b"SpendAuthorization(bytes32 commitment,uint64 serviceId,uint8 jobIndex,uint256 amount,address operator,uint256 nonce,uint64 expiry)",
     );
@@ -189,16 +212,16 @@ pub fn verify_spend_auth_signature(
             .abi_encode(),
     );
 
-    // EIP-712 digest: "\x19\x01" || domainSeparator || structHash
     let digest = keccak256(
-        [&[0x19, 0x01], domain_separator.as_slice(), struct_hash.as_slice()].concat(),
+        [
+            &[0x19, 0x01],
+            domain_separator.as_slice(),
+            struct_hash.as_slice(),
+        ]
+        .concat(),
     );
 
-    // Parse signature
-    let sig_hex = auth
-        .signature
-        .strip_prefix("0x")
-        .unwrap_or(&auth.signature);
+    let sig_hex = auth.signature.strip_prefix("0x").unwrap_or(&auth.signature);
     let Ok(sig_bytes) = hex::decode(sig_hex) else {
         return false;
     };
@@ -220,13 +243,11 @@ pub fn verify_spend_auth_signature(
     let Ok(rid) = RecoveryId::try_from(recovery_id) else {
         return false;
     };
-    let Ok(_recovered) =
-        VerifyingKey::recover_from_prehash(digest.as_slice(), &signature, rid)
+    let Ok(_recovered) = VerifyingKey::recover_from_prehash(digest.as_slice(), &signature, rid)
     else {
         return false;
     };
 
-    // Check expiry
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()

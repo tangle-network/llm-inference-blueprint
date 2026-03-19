@@ -35,6 +35,13 @@ tower-http = { version = "0.5", features = ["cors", "trace"] }
 config = "0.14"
 dotenvy = "0.15"
 
+# Metrics
+prometheus = { workspace = true }
+
+# Streaming
+futures-util = { workspace = true }
+tokio-stream = { workspace = true }
+
 # Misc
 bytes = "1"
 uuid = { version = "1", features = ["v4"] }
@@ -42,3 +49,4 @@ uuid = { version = "1", features = ["v4"] }
 [dev-dependencies]
 blueprint-sdk = { version = "0.1.0-alpha.22", features = ["testing", "tangle"] }
 blueprint-anvil-testing-utils = { version = "0.1.0-alpha.21" }
+wiremock = "0.6"

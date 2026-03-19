@@ -1,0 +1,17 @@
+{
+  "workerId": "claude",
+  "sampleCount": 3,
+  "successRate": 0.3333,
+  "commonFailureClasses": [
+    "Check failed: [object Object]",
+    "Check failed: cd /home/drew/code/vllm-inference-blueprint && cargo test --workspace",
+    "Repository inspection is blocked by the runtime sandbox",
+    "No success criterion could be verified",
+    "Formatting, lint, and test gates are unproven",
+    "Check failed: forge test",
+    "Independent code inspection was impossible, so there is no trustworthy basis for approval",
+    "Mandatory verification gates are not evidenced as passing",
+    "Every major success criterion remains unverified",
+    "Reported implementation surface is materially inconsistent with the requested scope"
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "target": "/home/drew/code/vllm-inference-blueprint",
+  "facts": [
+    "check-command: [object Object]",
+    "check-command: cd /home/drew/code/vllm-inference-blueprint && cargo fmt --all -- --check",
+    "check-command: cd /home/drew/code/vllm-inference-blueprint && cargo clippy --workspace -- -D warnings",
+    "check-command: cd /home/drew/code/vllm-inference-blueprint && cargo test --workspace",
+    "check-command: cargo fmt --all",
+    "check-command: cargo fmt --all -- --check",
+    "check-command: cargo clippy --workspace -- -D warnings",
+    "check-command: cargo test --workspace",
+    "check-command: forge test",
+    "check-command: cargo fmt --all --check"
+  ],
+  "invariants": [],
+  "failureModes": [
+    "Check failed: [object Object]",
+    "Check failed: cd /home/drew/code/vllm-inference-blueprint && cargo test --workspace",
+    "Repository inspection is blocked by the runtime sandbox",
+    "No success criterion could be verified",
+    "Formatting, lint, and test gates are unproven",
+    "Check failed: forge test",
+    "Independent code inspection was impossible, so there is no trustworthy basis for approval",
+    "Mandatory verification gates are not evidenced as passing",
+    "Every major success criterion remains unverified",
+    "Reported implementation surface is materially inconsistent with the requested scope"
+  ]
+}

@@ -1,0 +1,69 @@
+{
+  "originalGoal": "Add streaming SSE support to /v1/chat/completions. When stream=true, proxy vLLM SSE chunks to client in OpenAI format (data: {json}\\n\\n, final data: [DONE]). Read the stream field from ChatCompletionRequest. Add a test for streaming response format. Run cargo fmt, cargo clippy -D warnings, cargo test.",
+  "hardenedTask": {
+    "goal": "Add streaming SSE support to `/v1/chat/completions` so that when `stream=true` on `ChatCompletionRequest`, the service returns an OpenAI-compatible SSE stream by proxying vLLM streaming chunks as `data: {json}\\n\\n` events and terminating with `data: [DONE]\\n\\n`. Add a test covering the streaming response format, then run formatting, linting, and tests.",
+    "expandedGoal": [
+      "Extend the chat completions request handling path to read the `stream` field from `ChatCompletionRequest` and switch behavior based on it without regressing the existing non-streaming path.",
+      "For `stream=false` or absent, preserve the current synchronous `/v1/chat/completions` behavior and response schema.",
+      "For `stream=true`, call the upstream vLLM chat completions endpoint in streaming mode and return a streaming HTTP response to the client rather than buffering the full completion.",
+      "Emit OpenAI-compatible SSE framing exactly: each upstream chunk that should reach the client must be serialized as a single `data: {json}\\n\\n` event, and the stream must end with a final `data: [DONE]\\n\\n` event.",
+      "Preserve chunk ordering and stream incrementality so clients receive tokens as they arrive from vLLM; do not convert the stream back into a buffered response.",
+      "Ensure the HTTP response for streaming uses the correct SSE media type and does not violate SSE framing rules with missing separators, mixed plain text, or malformed JSON payloads.",
+      "Map or pass through chunk payloads in the OpenAI chat completion chunk shape expected by clients consuming `/v1/chat/completions` streams. If the upstream shape differs, normalize it in the proxy layer rather than leaking vLLM-specific framing.",
+      "Add an automated test that exercises the streaming branch end to end at the handler level, using the repository’s existing test style and mocking/stubbing the upstream vLLM stream rather than relying on a live model server.",
+      "The streaming test should verify at minimum: SSE content type, one or more `data: {json}` events, correct `\\n\\n` event boundaries, and the final `data: [DONE]` terminator.",
+      "The change should follow existing repository patterns for request forwarding, error handling, async streaming, and test utilities. Avoid introducing parallel custom response paths if the codebase already has a shared proxy/client abstraction."
+    ],
+    "successCriteria": [
+      "Submitting a chat completion request with `stream=true` causes `/v1/chat/completions` to return a streaming SSE response instead of the existing buffered JSON response.",
+      "The handler reads the `stream` field from `ChatCompletionRequest` rather than inferring streaming from query params, headers, or ad hoc request parsing.",
+      "The streaming response uses `text/event-stream` semantics and emits events framed as `data: <payload>\\n\\n`.",
+      "Each non-terminal streamed event contains valid JSON for an OpenAI chat completion chunk payload; the test must parse at least one streamed JSON event successfully.",
+      "The stream ends with exactly one terminal `data: [DONE]\\n\\n` event.",
+      "The implementation preserves event order from the upstream vLLM stream and does not buffer the full upstream body before responding.",
+      "Existing non-streaming `/v1/chat/completions` behavior remains intact for requests where `stream` is absent or false.",
+      "A new automated test covers the streaming format and fails if framing changes to plain JSON, missing `data:` prefixes, missing blank-line separators, or missing `[DONE]` termination.",
+      "`cargo fmt --all` completes successfully.",
+      "`cargo clippy --workspace -- -D warnings` completes successfully.",
+      "`cargo test --workspace` completes successfully."
+    ],
+    "checkCommands": [
+      "cargo fmt --all",
+      "cargo fmt --all --check",
+      "cargo clippy --workspace -- -D warnings",
+      "cargo test --workspace"
+    ],
+    "executionNotes": [
+      "Implement streaming in the HTTP proxy layer, not in a post-processing buffer. The right shape is usually an async byte stream converted into an Axum/Hyper streaming body.",
+      "Prefer reusing existing request/response types and upstream client code. Only branch where the transport mode differs.",
+      "Do not hand-build large JSON strings if serde-backed types already exist. Serialize chunk payloads with the repository’s existing JSON machinery, then wrap them in SSE framing.",
+      "Be strict about SSE formatting. Common failure modes are emitting a raw JSON line without `data: `, forgetting the extra blank line between events, or omitting the final `[DONE]` event.",
+      "If upstream vLLM already returns SSE, the proxy still needs to ensure the client-facing format is OpenAI-compatible and not a leaky pass-through of upstream quirks.",
+      "Keep non-streaming behavior unchanged. The safest structure is a narrow conditional on `request.stream` that chooses between the existing JSON response path and a new streaming path.",
+      "Tests should use a stubbed upstream stream source with deterministic chunks. Avoid tests that depend on timing, real network calls, or a live model.",
+      "If the codebase already has helper functions for building responses, headers, or mock upstream servers, follow those patterns instead of introducing new bespoke test infrastructure.",
+      "Clippy at `-D warnings` will force cleanup of unused imports, dead helper functions, needless allocations, and suboptimal stream combinators. Expect to tighten the implementation after the first pass."
+    ],
+    "inferred": true
+  },
+  "checkCommands": [
+    "cargo fmt --all",
+    "cargo fmt --all --check",
+    "cargo clippy --workspace -- -D warnings",
+    "cargo test --workspace",
+    "cd /home/drew/code/vllm-inference-blueprint && cargo fmt --all -- --check",
+    "cd /home/drew/code/vllm-inference-blueprint && cargo clippy --workspace -- -D warnings",
+    "cd /home/drew/code/vllm-inference-blueprint && cargo test --workspace"
+  ],
+  "toolCommands": [],
+  "selectedWorkerId": "claude",
+  "reviewWorkerId": "codex",
+  "plannerWorkerId": "codex",
+  "sandboxMode": "local",
+  "promptVariantIds": {
+    "hardener": "engineering-hardener:contract-v1",
+    "implementer": "engineering-implementer:operator-v1",
+    "reviewer": "engineering-reviewer:auditor-v1"
+  },
+  "promptPolicyMode": "explicit"
+}

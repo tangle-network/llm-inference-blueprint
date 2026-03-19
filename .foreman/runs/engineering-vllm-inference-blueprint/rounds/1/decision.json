@@ -1,0 +1,5 @@
+{
+  "done": true,
+  "status": "completed",
+  "reason": "[deterministic] all deterministic checks passed for engineering-vllm-inference-blueprint | [judge] Deterministic gates are reported as passing, and the implementation evidence indicates the full requested streaming/non-streaming split was added on the `ChatCompletionRequest.stream` field, with SSE framing normalized for OpenAI-compatible chat-completions streaming and covered by a handler-level automated test."
+}

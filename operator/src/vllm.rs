@@ -7,7 +7,6 @@ use tokio::sync::Mutex;
 use crate::config::OperatorConfig;
 use crate::server::{ChatCompletionRequest, ChatCompletionResponse};
 
-
 /// Manages a vLLM subprocess.
 pub struct VllmProcess {
     child: Mutex<Option<Child>>,
@@ -16,6 +15,20 @@ pub struct VllmProcess {
 }
 
 impl VllmProcess {
+    /// Connect to an already-running vLLM instance without spawning a subprocess.
+    /// Useful for testing or when vLLM is managed externally.
+    pub fn connect(config: Arc<OperatorConfig>) -> Self {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(300))
+            .build()
+            .expect("failed to build HTTP client");
+        Self {
+            child: Mutex::new(None),
+            config,
+            client,
+        }
+    }
+
     /// Spawn the vLLM OpenAI-compatible server as a subprocess.
     pub async fn spawn(config: Arc<OperatorConfig>) -> anyhow::Result<Self> {
         let vllm_url = format!("http://{}:{}", config.vllm.host, config.vllm.port);
@@ -48,20 +61,12 @@ impl VllmProcess {
             cmd.arg(arg);
         }
 
-        // Don't inherit stdin; capture stderr for logging
         cmd.stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
 
         let child = cmd.spawn()?;
         tracing::info!(pid = child.id(), url = %vllm_url, "spawned vLLM process");
-
-        // Spawn a task to drain stderr and log it
-        let stderr = child.stderr.as_ref().map(|_| ());
-        if stderr.is_some() {
-            // In a real implementation, we'd tokio::io::BufReader the stderr
-            // and log each line. Keeping it simple for now.
-        }
 
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(300))
@@ -91,7 +96,6 @@ impl VllmProcess {
                 );
             }
 
-            // Check if the process has exited
             {
                 let mut guard = self.child.lock().await;
                 if let Some(ref mut child) = *guard {
@@ -99,7 +103,7 @@ impl VllmProcess {
                         Ok(Some(status)) => {
                             anyhow::bail!("vLLM process exited during startup: {status}");
                         }
-                        Ok(None) => {} // still running
+                        Ok(None) => {}
                         Err(e) => {
                             anyhow::bail!("failed to poll vLLM process: {e}");
                         }
@@ -132,32 +136,44 @@ impl VllmProcess {
         )
     }
 
-    /// Proxy a chat completion request to vLLM.
-    pub async fn chat_completion(
-        &self,
-        req: &ChatCompletionRequest,
-    ) -> anyhow::Result<ChatCompletionResponse> {
-        let url = format!(
+    fn completions_url(&self) -> String {
+        format!(
             "http://{}:{}/v1/chat/completions",
             self.config.vllm.host, self.config.vllm.port
-        );
+        )
+    }
 
-        // Build the vLLM-native request (strip our custom fields like spend_auth)
-        let vllm_body = serde_json::json!({
+    fn build_vllm_body(&self, req: &ChatCompletionRequest, stream: bool) -> serde_json::Value {
+        let mut body = serde_json::json!({
             "model": req.model.as_deref().unwrap_or(&self.config.vllm.model),
             "messages": req.messages,
             "max_tokens": req.max_tokens,
             "temperature": req.temperature,
-            "stream": false,
+            "stream": stream,
             "top_p": req.top_p,
             "frequency_penalty": req.frequency_penalty,
             "presence_penalty": req.presence_penalty,
             "stop": req.stop,
         });
 
+        // When streaming, request usage in the final chunk
+        if stream {
+            body["stream_options"] = serde_json::json!({"include_usage": true});
+        }
+
+        body
+    }
+
+    /// Proxy a non-streaming chat completion request to vLLM.
+    pub async fn chat_completion(
+        &self,
+        req: &ChatCompletionRequest,
+    ) -> anyhow::Result<ChatCompletionResponse> {
+        let vllm_body = self.build_vllm_body(req, false);
+
         let resp = self
             .client
-            .post(&url)
+            .post(self.completions_url())
             .json(&vllm_body)
             .send()
             .await?
@@ -168,12 +184,30 @@ impl VllmProcess {
         Ok(resp)
     }
 
+    /// Start a streaming chat completion, returning the raw reqwest::Response.
+    /// The caller proxies the byte stream to the client.
+    pub async fn chat_completion_stream(
+        &self,
+        req: &ChatCompletionRequest,
+    ) -> anyhow::Result<reqwest::Response> {
+        let vllm_body = self.build_vllm_body(req, true);
+
+        let resp = self
+            .client
+            .post(self.completions_url())
+            .json(&vllm_body)
+            .send()
+            .await?
+            .error_for_status()?;
+
+        Ok(resp)
+    }
+
     /// Shut down the vLLM subprocess.
     pub async fn shutdown(&self) {
         let mut guard = self.child.lock().await;
         if let Some(ref mut child) = *guard {
             tracing::info!(pid = child.id(), "shutting down vLLM");
-            // Send SIGTERM first
             let _ = child.kill().await;
         }
         *guard = None;
@@ -182,7 +216,6 @@ impl VllmProcess {
 
 impl Drop for VllmProcess {
     fn drop(&mut self) {
-        // Best-effort sync kill on drop
         if let Ok(mut guard) = self.child.try_lock() {
             if let Some(ref mut child) = *guard {
                 let _ = child.start_kill();

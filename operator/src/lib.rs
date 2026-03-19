@@ -1,21 +1,22 @@
 pub mod billing;
 pub mod config;
 pub mod health;
+pub mod metrics;
 pub mod vllm;
 
-mod server;
+pub mod server;
 
 use std::sync::Arc;
 
 use alloy_sol_types::sol;
 use blueprint_sdk::macros::debug_job;
 use blueprint_sdk::router::Router;
-use blueprint_sdk::runner::BackgroundService;
 use blueprint_sdk::runner::error::RunnerError;
-use blueprint_sdk::tangle::layers::TangleLayer;
+use blueprint_sdk::runner::BackgroundService;
 use blueprint_sdk::tangle::extract::{TangleArg, TangleResult};
+use blueprint_sdk::tangle::layers::TangleLayer;
 use blueprint_sdk::Job;
-use tokio::sync::oneshot;
+use tokio::sync::{oneshot, Semaphore};
 
 use crate::config::OperatorConfig;
 use crate::vllm::VllmProcess;
@@ -65,7 +66,6 @@ pub async fn run_inference(
     let temperature = request.temperature as f32 / 1000.0;
     let max_tokens = request.maxTokens;
 
-    // Build a request to the local vLLM subprocess
     let client = reqwest::Client::new();
     let vllm_body = serde_json::json!({
         "model": "default",
@@ -75,8 +75,6 @@ pub async fn run_inference(
         "stream": false,
     });
 
-    // The vLLM subprocess listens on localhost:8000 by default.
-    // In production, read the port from config via Context injection.
     let resp = client
         .post("http://127.0.0.1:8000/v1/chat/completions")
         .json(&vllm_body)
@@ -111,9 +109,7 @@ pub struct InferenceServer {
 }
 
 impl BackgroundService for InferenceServer {
-    async fn start(
-        &self,
-    ) -> Result<oneshot::Receiver<Result<(), RunnerError>>, RunnerError> {
+    async fn start(&self) -> Result<oneshot::Receiver<Result<(), RunnerError>>, RunnerError> {
         let (tx, rx) = oneshot::channel();
         let config = self.config.clone();
 
@@ -146,18 +142,25 @@ impl BackgroundService for InferenceServer {
                 }
             };
 
-            // 3. Start the HTTP server
+            // 3. Build semaphore from config (0 = unlimited)
+            let max_concurrent = config.server.max_concurrent_requests;
+            let semaphore = Arc::new(if max_concurrent == 0 {
+                Semaphore::new(Semaphore::MAX_PERMITS)
+            } else {
+                Semaphore::new(max_concurrent)
+            });
+
+            // 4. Start the HTTP server
             let state = server::AppState {
                 config: config.clone(),
                 vllm: vllm_handle.clone(),
                 billing: billing_client,
+                semaphore,
             };
 
             match server::start(state).await {
                 Ok(_join_handle) => {
                     tracing::info!("HTTP server started");
-                    // Don't send on tx yet — server runs until shutdown.
-                    // The oneshot stays open, signaling "still alive" to the runner.
                 }
                 Err(e) => {
                     tracing::error!(error = %e, "failed to start HTTP server");

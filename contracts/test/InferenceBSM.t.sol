@@ -272,6 +272,22 @@ contract InferenceBSMTest is Test {
         assertFalse(bsm.canJoin(1, operator1));
     }
 
+    // ─── Operator Pricing Query ────────────────────────────────────────
+
+    function test_getOperatorPricing() public {
+        _registerOperator(operator1);
+
+        (uint64 inputPrice, uint64 outputPrice, string memory endpoint) = bsm.getOperatorPricing(operator1);
+        assertEq(inputPrice, 1);
+        assertEq(outputPrice, 2);
+        assertEq(keccak256(bytes(endpoint)), keccak256(bytes("https://operator.example.com")));
+    }
+
+    function test_getOperatorPricing_unregistered() public {
+        vm.expectRevert(abi.encodeWithSelector(InferenceBSM.OperatorNotRegistered.selector, operator1));
+        bsm.getOperatorPricing(operator1);
+    }
+
     // ─── Helpers ─────────────────────────────────────────────────────────
 
     function _registerOperator(address op) internal {

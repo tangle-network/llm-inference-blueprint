@@ -1,0 +1,8 @@
+{
+  "summary": "Repair the issues identified during validation.",
+  "actions": [
+    "Resolve critical finding: Primary code inspection is blocked by the runtime sandbox",
+    "Resolve critical finding: Required quality gates were not independently proven in this review session",
+    "Resolve high finding: Streaming wire-format success criteria remain unverified at review time"
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "summary": "Use claude to repair the latest validation issues",
+  "tracks": [
+    {
+      "id": "implement",
+      "goal": "Implement a real streaming code path for chat completions that is activated by the request body's `stream` field, with `ChatCompletionRequest` deserializing that field correctly and defaulting to non-streaming behavior when it is absent or false. The streaming path must avoid collecting the full upstream response in memory, must emit `data: {json}\\n\\n` events as chunks arrive, and must terminate with `data: [DONE]\\n\\n`. The existing non-streaming `/v1/chat/completions` behavior must remain unchanged. Add a focused automated test that exercises the streaming branch end to end at the HTTP layer and verifies the response framing, including SSE event formatting and terminal `[DONE]`. The implementation should match existing repository conventions for handlers, request/response types, and async streaming primitives, and it must meet the repo's normal quality bar for tests, lint cleanliness, and no warnings.",
+      "capability": "code",
+      "metadata": {
+        "workerId": "claude"
+      },
+      "input": {
+        "workerId": "claude"
+      }
+    }
+  ],
+  "risks": [
+    "Resolve critical finding: Primary code inspection is blocked by the runtime sandbox",
+    "Resolve critical finding: Required quality gates were not independently proven in this review session",
+    "Resolve high finding: Streaming wire-format success criteria remain unverified at review time"
+  ]
+}

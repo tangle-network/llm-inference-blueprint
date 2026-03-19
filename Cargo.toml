@@ -22,3 +22,6 @@ anyhow = "1"
 thiserror = "2"
 hex = "0.4"
 k256 = { version = "0.13", features = ["ecdsa"] }
+prometheus = "0.13"
+futures-util = "0.3"
+tokio-stream = "0.1"
