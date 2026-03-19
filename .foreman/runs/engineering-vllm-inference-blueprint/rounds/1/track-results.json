@@ -3,27 +3,27 @@
     "trackId": "implement",
     "status": "completed",
     "summary": "claude completed successfully",
-    "output": "All 18 tests pass. Let me verify the specific streaming test coverage against the success criteria by reviewing the test one more time.\n\nThe implementation is already **complete and passing all checks**. Here's the evidence:\n\n**Implementation (already in place):**\n- `server.rs:69` — `ChatCompletionRequest.stream` field with `#[serde(default)]` (defaults to `false`)\n- `server.rs:220-224` — Handler branches on `req.stream`: `handle_streaming` vs `handle_non_streaming`\n- `server.rs:270-389` — `handle_streaming` proxies the upstream byte stream without buffering, returns `text/event-stream` with `no-cache` and `keep-alive` headers\n- `vllm.rs:189-204` — `chat_completion_stream` returns raw `reqwest::Response` for true streaming proxy\n- `vllm.rs:146-165` — `build_vllm_body` sets `stream: true` + `stream_options.include_usage` for upstream\n\n**Tests (already in place):**\n- `test_streaming_through_handler` — full handler-level test: verifies `text/event-stream` content type, `data: {json}\\n\\n` events with valid JSON + `choices`, terminal `data: [DONE]`, all non-DONE lines parse as JSON\n- `test_non_streaming_through_handler` — verifies non-streaming returns `application/json` with correct body\n- `test_stream_field_defaults_to_false` — verifies omitting `stream` field defaults to non-streaming JSON\n- `test_streaming_via_wiremock` / `test_non_streaming_via_wiremock` — direct upstream mock tests\n\n**Verification:**\n- `cargo fmt --all -- --check`: clean\n- `cargo clippy --workspace -- -D warnings`: exit 0\n- `cargo test --workspace`: 18/18 passed",
+    "output": "All changes verified. Here's the summary of what was done:\n\n**1. server.rs — Billing settlement fix + policy enforcement**\n- `handle_non_streaming`: `claim_payment` now receives `charge_amount` (= `min(actual_cost, preauth_amount)`) instead of claiming the full pre-authorized amount\n- `handle_streaming`: Same fix in the background settlement task\n- Added `max_spend_per_request` enforcement: rejects requests where `spend_auth.amount` exceeds the configured limit (HTTP 400, `exceeds_max_spend`)\n- Added `min_credit_balance` enforcement: queries on-chain balance via `get_account_balance` and rejects if below threshold (HTTP 402, `insufficient_balance`)\n\n**2. vllm.rs — Pipe backpressure fix**\n- After `cmd.spawn()`, both `stdout` and `stderr` are `.take()`n from the child and drained in independent `tokio::spawn` tasks using `BufReader::lines()`\n- stdout → `tracing::info!(target: \"vllm::stdout\")`\n- stderr → `tracing::warn!(target: \"vllm::stderr\")`\n- Drain tasks are best-effort; read errors terminate the loop silently without crashing the operator\n\n**3. lib.rs — Panic-free job handling**\n- Return type changed from `TangleResult<InferenceResult>` to `Result<TangleResult<InferenceResult>, RunnerError>`\n- Both `.expect()` calls replaced with `.map_err(|e| RunnerError::Other(...))` + `?`\n- Errors are logged via `tracing::error!` before propagation\n\n**4. billing.rs — Supporting changes**\n- `claim_payment` now takes `actual_amount: u64` and logs it for audit\n- Added `get_account_balance` method for on-chain balance queries\n- Updated `authorize_and_claim` to pass through `actual_amount`\n\n**5. Tests added (5 new, 23 total passing)**\n- `test_billing_actual_cost_less_than_preauth`: asserts charge = actual cost when below ceiling\n- `test_billing_actual_cost_exceeds_preauth_cap`: asserts charge capped at pre-auth\n- `test_billing_zero_usage_yields_zero_charge`: asserts zero usage → zero charge\n- `test_max_spend_per_request_rejection`: validates policy enforcement path\n- `test_run_inference_returns_error_on_connection_failure`: confirms reqwest returns Err (not panic) on unreachable vLLM\n\n**Gates**: `cargo fmt --check` ✓ | `cargo clippy -D warnings` ✓ (exit 0) | `cargo test --workspace` ✓ (23/23)",
     "evidence": [
       {
         "kind": "log",
         "label": "stdout",
-        "value": "{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"duration_ms\":72184,\"duration_api_ms\":67042,\"num_turns\":15,\"result\":\"All 18 tests pass. Let me verify the specific streaming test coverage against the success criteria by reviewing the test one more time.\\n\\nThe implementation is already **complete and passing all checks**. Here's the evidence:\\n\\n**Implementation (already in place):**\\n- `server.rs:69` — `ChatCompletionRequest.stream` field with `#[serde(default)]` (defaults to `false`)\\n- `server.rs:220-224` — Handler branches on `req.stream`: `handle_streaming` vs `handle_non_streaming`\\n- `server.rs:270-389` — `handle_streaming` proxies the upstream byte stream without buffering, returns `text/event-stream` with `no-cache` and `keep-alive` headers\\n- `vllm.rs:189-204` — `chat_completion_stream` returns raw `reqwest::Response` for true streaming proxy\\n- `vllm.rs:146-165` — `build_vllm_body` sets `stream: true` + `stream_options.include_usage` for upstream\\n\\n**Tests (already in place):**\\n- `test_streaming_through_handler` — full handler-level test: verifies `text/event-stream` content type, `data: {json}\\\\n\\\\n` events with valid JSON + `choices`, terminal `data: [DONE]`, all non-DONE lines parse as JSON\\n- `test_non_streaming_through_handler` — verifies non-streaming returns `application/json` with correct body\\n- `test_stream_field_defaults_to_false` — verifies omitting `stream` field defaults to non-streaming JSON\\n- `test_streaming_via_wiremock` / `test_non_streaming_via_wiremock` — direct upstream mock tests\\n\\n**Verification:**\\n- `cargo fmt --all -- --check`: clean\\n- `cargo clippy --workspace -- -D warnings`: exit 0\\n- `cargo test --workspace`: 18/18 passed\",\"stop_reason\":\"end_turn\",\"session_id\":\"ac97d735-dbdd-4aaa-8015-d8ef3e68ca35\",\"total_cost_usd\":0.46537475,\"usage\":{\"input_tokens\":10,\"cache_creation_input_tokens\":39535,\"cache_read_input_tokens\":334262,\"output_tokens\":2044,\"server_tool_use\":{\"web_search_requests\":0,\"web_fetch_requests\":0},\"service_tier\":\"standard\",\"cache_creation\":{\"ephemeral_1h_input_tokens\":39535,\"ephemeral_5m_input_tokens\":0},\"inference_geo\":\"\",\"iterations\":[],\"speed\":\"standard\"},\"modelUsage\":{\"claude-opus-4-6[1m]\":{\"inputTokens\":10,\"outputTokens\":2044,\"cacheReadInputTokens\":334262,\"cacheCreationInputTokens\":39535,\"webSearchRequests\":0,\"costUSD\":0.46537475,\"contextWindow\":1000000,\"maxOutputTokens\":64000}},\"permission_denials\":[],\"fast_mode_state\":\"off\",\"uuid\":\"d60b3427-0e88-4fc1-a2ba-d7dfad44a70b\"}",
+        "value": "{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"duration_ms\":270962,\"duration_api_ms\":254115,\"num_turns\":33,\"result\":\"All changes verified. Here's the summary of what was done:\\n\\n**1. server.rs — Billing settlement fix + policy enforcement**\\n- `handle_non_streaming`: `claim_payment` now receives `charge_amount` (= `min(actual_cost, preauth_amount)`) instead of claiming the full pre-authorized amount\\n- `handle_streaming`: Same fix in the background settlement task\\n- Added `max_spend_per_request` enforcement: rejects requests where `spend_auth.amount` exceeds the configured limit (HTTP 400, `exceeds_max_spend`)\\n- Added `min_credit_balance` enforcement: queries on-chain balance via `get_account_balance` and rejects if below threshold (HTTP 402, `insufficient_balance`)\\n\\n**2. vllm.rs — Pipe backpressure fix**\\n- After `cmd.spawn()`, both `stdout` and `stderr` are `.take()`n from the child and drained in independent `tokio::spawn` tasks using `BufReader::lines()`\\n- stdout → `tracing::info!(target: \\\"vllm::stdout\\\")`\\n- stderr → `tracing::warn!(target: \\\"vllm::stderr\\\")`\\n- Drain tasks are best-effort; read errors terminate the loop silently without crashing the operator\\n\\n**3. lib.rs — Panic-free job handling**\\n- Return type changed from `TangleResult<InferenceResult>` to `Result<TangleResult<InferenceResult>, RunnerError>`\\n- Both `.expect()` calls replaced with `.map_err(|e| RunnerError::Other(...))` + `?`\\n- Errors are logged via `tracing::error!` before propagation\\n\\n**4. billing.rs — Supporting changes**\\n- `claim_payment` now takes `actual_amount: u64` and logs it for audit\\n- Added `get_account_balance` method for on-chain balance queries\\n- Updated `authorize_and_claim` to pass through `actual_amount`\\n\\n**5. Tests added (5 new, 23 total passing)**\\n- `test_billing_actual_cost_less_than_preauth`: asserts charge = actual cost when below ceiling\\n- `test_billing_actual_cost_exceeds_preauth_cap`: asserts charge capped at pre-auth\\n- `test_billing_zero_usage_yields_zero_charge`: asserts zero usage → zero charge\\n- `test_max_spend_per_request_rejection`: validates policy enforcement path\\n- `test_run_inference_returns_error_on_connection_failure`: confirms reqwest returns Err (not panic) on unreachable vLLM\\n\\n**Gates**: `cargo fmt --check` ✓ | `cargo clippy -D warnings` ✓ (exit 0) | `cargo test --workspace` ✓ (23/23)\",\"stop_reason\":\"end_turn\",\"session_id\":\"f60cabec-64b2-4444-a1e5-a14efb51ce55\",\"total_cost_usd\":1.35697775,\"usage\":{\"input_tokens\":26,\"cache_creation_input_tokens\":62259,\"cache_read_input_tokens\":1265108,\"output_tokens\":13407,\"server_tool_use\":{\"web_search_requests\":0,\"web_fetch_requests\":0},\"service_tier\":\"standard\",\"cache_creation\":{\"ephemeral_1h_input_tokens\":62259,\"ephemeral_5m_input_tokens\":0},\"inference_geo\":\"\",\"iterations\":[],\"speed\":\"standard\"},\"modelUsage\":{\"claude-opus-4-6[1m]\":{\"inputTokens\":26,\"outputTokens\":13407,\"cacheReadInputTokens\":1265108,\"cacheCreationInputTokens\":62259,\"webSearchRequests\":0,\"costUSD\":1.35697775,\"contextWindow\":1000000,\"maxOutputTokens\":64000}},\"permission_denials\":[],\"fast_mode_state\":\"off\",\"uuid\":\"6c46703f-ff28-4b5a-8102-7d8cf8043fe1\"}",
         "metadata": {
-          "durationMs": "72732",
+          "durationMs": "271496",
           "providerId": "claude",
           "exitCode": "0",
-          "costUsd": "0.46537475",
+          "costUsd": "1.35697775",
           "providerFormat": "json",
-          "sessionId": "ac97d735-dbdd-4aaa-8015-d8ef3e68ca35",
+          "sessionId": "f60cabec-64b2-4444-a1e5-a14efb51ce55",
           "stopReason": "end_turn",
-          "numTurns": "15",
+          "numTurns": "33",
           "modelIds": "claude-opus-4-6[1m]",
-          "inputTokens": "10",
-          "cacheCreationInputTokens": "39535",
-          "cacheReadInputTokens": "334262",
-          "outputTokens": "2044",
-          "totalCostUsd": "0.46537475"
+          "inputTokens": "26",
+          "cacheCreationInputTokens": "62259",
+          "cacheReadInputTokens": "1265108",
+          "outputTokens": "13407",
+          "totalCostUsd": "1.35697775"
         }
       },
       {
@@ -31,28 +31,28 @@
         "label": "stderr",
         "value": "",
         "metadata": {
-          "durationMs": "72732",
+          "durationMs": "271496",
           "providerId": "claude",
           "exitCode": "0",
-          "costUsd": "0.46537475",
+          "costUsd": "1.35697775",
           "providerFormat": "json",
-          "sessionId": "ac97d735-dbdd-4aaa-8015-d8ef3e68ca35",
+          "sessionId": "f60cabec-64b2-4444-a1e5-a14efb51ce55",
           "stopReason": "end_turn",
-          "numTurns": "15",
+          "numTurns": "33",
           "modelIds": "claude-opus-4-6[1m]",
-          "inputTokens": "10",
-          "cacheCreationInputTokens": "39535",
-          "cacheReadInputTokens": "334262",
-          "outputTokens": "2044",
-          "totalCostUsd": "0.46537475"
+          "inputTokens": "26",
+          "cacheCreationInputTokens": "62259",
+          "cacheReadInputTokens": "1265108",
+          "outputTokens": "13407",
+          "totalCostUsd": "1.35697775"
         }
       }
     ],
     "findings": [],
     "metadata": {
       "workerId": "claude",
-      "durationMs": "72732",
-      "costUsd": "0.46537475"
+      "durationMs": "271496",
+      "costUsd": "1.35697775"
     }
   }
 ]

@@ -1,0 +1,8 @@
+{
+  "summary": "Repair the issues identified during validation.",
+  "actions": [
+    "Resolve high finding: Check failed: cd /home/drew/code/vllm-inference-blueprint && cargo test --workspace",
+    "Resolve high finding: Workspace test gate is not passing in the provided evidence",
+    "Resolve medium finding: Passing fmt/clippy/test results are asserted but not demonstrated consistently"
+  ]
+}

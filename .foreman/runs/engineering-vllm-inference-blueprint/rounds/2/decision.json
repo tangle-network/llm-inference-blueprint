@@ -1,0 +1,5 @@
+{
+  "done": true,
+  "status": "completed",
+  "reason": "[deterministic] all deterministic checks passed for engineering-vllm-inference-blueprint | [judge] Approve for production based on the latest evidence. The prior failing workspace test gate was repaired in the current round, the latest track reports clean formatting/lint/test gates, and the implementation summary covers the required scope: actual-cost settlement capped by pre-authorization, request-path policy enforcement, asynchronous draining of vLLM child stdout/stderr, and removal of panic-on-dependency-failure behavior in job handling, with tests updated for the billing and handled-error regressions."
+}

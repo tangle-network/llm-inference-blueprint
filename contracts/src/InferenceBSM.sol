@@ -343,14 +343,14 @@ contract InferenceBSM is IBlueprintServiceManager {
     // ═══════════════════════════════════════════════════════════════════════
 
     /// @notice Validate an inference job submission
-    /// @dev inputs = abi.encode(string prompt, uint32 maxTokens, uint32 temperatureE4)
+    /// @dev inputs = abi.encode(string prompt, uint32 maxTokens, uint64 temperature)
     function onJobCall(
         uint64 serviceId,
         uint8,
         uint64 jobCallId,
         bytes calldata inputs
     ) external payable onlyFromTangle {
-        (, uint32 maxTokens,) = abi.decode(inputs, (string, uint32, uint32));
+        (, uint32 maxTokens,) = abi.decode(inputs, (string, uint32, uint64));
 
         emit InferenceJobSubmitted(serviceId, jobCallId, maxTokens);
     }

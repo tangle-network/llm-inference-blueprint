@@ -1,0 +1,8 @@
+{
+  "summary": "Repair the issues identified during validation.",
+  "actions": [
+    "Resolve critical finding: Primary repository inspection was impossible in this review session",
+    "Resolve critical finding: Required quality gates were not independently proven",
+    "Resolve high finding: Streaming wire-format success criteria remain unverified at review time"
+  ]
+}

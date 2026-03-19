@@ -1,30 +1,22 @@
 {
   "task": {
     "id": "engineering-vllm-inference-blueprint",
-    "goal": [
-      "Extend the chat completions request handling path to read the `stream` field from `ChatCompletionRequest` and switch behavior based on it without regressing the existing non-streaming path.",
-      "For `stream=false` or absent, preserve the current synchronous `/v1/chat/completions` behavior and response schema.",
-      "For `stream=true`, call the upstream vLLM chat completions endpoint in streaming mode and return a streaming HTTP response to the client rather than buffering the full completion.",
-      "Emit OpenAI-compatible SSE framing exactly: each upstream chunk that should reach the client must be serialized as a single `data: {json}\\n\\n` event, and the stream must end with a final `data: [DONE]\\n\\n` event.",
-      "Preserve chunk ordering and stream incrementality so clients receive tokens as they arrive from vLLM; do not convert the stream back into a buffered response.",
-      "Ensure the HTTP response for streaming uses the correct SSE media type and does not violate SSE framing rules with missing separators, mixed plain text, or malformed JSON payloads.",
-      "Map or pass through chunk payloads in the OpenAI chat completion chunk shape expected by clients consuming `/v1/chat/completions` streams. If the upstream shape differs, normalize it in the proxy layer rather than leaking vLLM-specific framing.",
-      "Add an automated test that exercises the streaming branch end to end at the handler level, using the repository’s existing test style and mocking/stubbing the upstream vLLM stream rather than relying on a live model server.",
-      "The streaming test should verify at minimum: SSE content type, one or more `data: {json}` events, correct `\\n\\n` event boundaries, and the final `data: [DONE]` terminator.",
-      "The change should follow existing repository patterns for request forwarding, error handling, async streaming, and test utilities. Avoid introducing parallel custom response paths if the codebase already has a shared proxy/client abstraction."
-    ],
+    "goal": "Implement the fixes in a production-safe way across the existing Rust workspace. In `server.rs` `handle_non_streaming`, compute the final claim from actual metered usage and configured pricing, and use that value in `claim_payment` instead of the full pre-authorized `spend_auth.amount`; also enforce both `max_spend_per_request` and `min_credit_balance` from configuration on the request path so requests that exceed policy fail cleanly before billing/processing proceeds. In `vllm.rs`, keep the current child-process model but eliminate the stdout/stderr backpressure hazard by actively draining both pipes asynchronously with Tokio readers and forwarding output into tracing so the service cannot hang when vLLM writes enough logs to fill the OS pipe buffer. In `lib.rs`, remove `.expect()` usage from on-chain job-handling error paths and convert those branches to proper `Result`-returning behavior so dependency failures such as vLLM downtime surface as handled job errors rather than crashing the operator. The finished change should preserve existing behavior where correct, add or update tests around the billing and error-handling regressions where the repository already has adjacent tests, and leave the workspace clean under formatting, clippy, and test gates.",
     "successCriteria": [
-      "Submitting a chat completion request with `stream=true` causes `/v1/chat/completions` to return a streaming SSE response instead of the existing buffered JSON response.",
-      "The handler reads the `stream` field from `ChatCompletionRequest` rather than inferring streaming from query params, headers, or ad hoc request parsing.",
-      "The streaming response uses `text/event-stream` semantics and emits events framed as `data: <payload>\\n\\n`.",
-      "Each non-terminal streamed event contains valid JSON for an OpenAI chat completion chunk payload; the test must parse at least one streamed JSON event successfully.",
-      "The stream ends with exactly one terminal `data: [DONE]\\n\\n` event.",
-      "The implementation preserves event order from the upstream vLLM stream and does not buffer the full upstream body before responding.",
-      "Existing non-streaming `/v1/chat/completions` behavior remains intact for requests where `stream` is absent or false.",
-      "A new automated test covers the streaming format and fails if framing changes to plain JSON, missing `data:` prefixes, missing blank-line separators, or missing `[DONE]` termination.",
-      "`cargo fmt --all` completes successfully.",
-      "`cargo clippy --workspace -- -D warnings` completes successfully.",
-      "`cargo test --workspace` completes successfully."
+      "In `server.rs` `handle_non_streaming`, the amount passed to `claim_payment` is derived from actual token usage and configured price, not from the full pre-authorization value `spend_auth.amount`.",
+      "The billing path still respects pre-authorization semantics: pre-auth may cap maximum liability, but final settlement/claim only charges the actual metered cost.",
+      "`max_spend_per_request` is enforced from configuration on the non-streaming request path, with a normal handled error when a request would exceed the configured limit.",
+      "`min_credit_balance` is enforced from configuration on the request path, with a normal handled error when the caller balance is below the configured minimum.",
+      "If actual usage is lower than the pre-authorized amount, the claimed amount is lower accordingly; there is no code path in the fixed handler that unconditionally claims the entire pre-authorized amount for non-streaming requests.",
+      "In `vllm.rs`, both child `stdout` and `stderr` are actively drained for the lifetime of the subprocess using Tokio async I/O primitives such as `tokio::io::BufReader` and line or chunk consumption.",
+      "The vLLM process spawn path no longer leaves piped `stdout` or `stderr` unread; there is no remaining TODO or equivalent behavior that can allow a full pipe buffer to block the child.",
+      "vLLM stdout is routed to tracing at an appropriate non-error level and stderr is routed to tracing at warning/error level, without blocking the main service flow.",
+      "In `lib.rs` job-handling paths, `.expect()` is removed anywhere an external/runtime failure can occur during on-chain job processing.",
+      "When vLLM or another downstream dependency fails during job handling, the operator returns/propagates a proper error result instead of panicking or terminating the process.",
+      "Formatting passes with no diffs after the change set.",
+      "`cargo clippy` passes with `-D warnings` for the workspace.",
+      "`cargo test --workspace` passes.",
+      "If tests are added or updated, they cover at least the billing settlement regression and one non-panicking job-handler failure path; tests must assert behavior, not only successful compilation."
     ],
     "environment": {
       "kind": "code",
@@ -34,7 +26,7 @@
       "escalationMode": "auto-repair"
     },
     "metadata": {
-      "originalGoal": "Add streaming SSE support to /v1/chat/completions. When stream=true, proxy vLLM SSE chunks to client in OpenAI format (data: {json}\\n\\n, final data: [DONE]). Read the stream field from ChatCompletionRequest. Add a test for streaming response format. Run cargo fmt, cargo clippy -D warnings, cargo test.",
+      "originalGoal": "Fix the 3 most critical production blockers found in the independent audit:\n\n1. BILLING BUG (CRITICAL): In server.rs handle_non_streaming, charge_amount is computed but IGNORED — claim_payment always claims the full pre-authorized spend_auth.amount. Fix: pass actual_cost (based on real token usage × price) to the claim, not the pre-auth amount. Also enforce max_spend_per_request and min_credit_balance from config.\n\n2. VLLM PIPE DEADLOCK (CRITICAL): vllm.rs spawns the subprocess with piped stdout/stderr but NEVER reads them. When the 64KB pipe buffer fills, vLLM blocks on write and hangs. Fix: drain both stdout and stderr via tokio BufReader into tracing::info/warn. This was noted in the code as a TODO.\n\n3. JOB HANDLER PANIC (CRITICAL): lib.rs uses .expect() on lines that can fail during on-chain job handling. If vLLM is down, this panics and kills the entire operator. Fix: return proper error results instead of panicking.\n\nRun cargo fmt, cargo clippy -D warnings, cargo test after fixes.",
       "profileId": "engineering-foreman",
       "selectedWorkerId": "claude",
       "reviewWorkerId": "codex",
@@ -48,12 +40,12 @@
     }
   },
   "status": "completed",
-  "finishedAt": "2026-03-19T02:23:04.678Z",
-  "rounds": 1,
+  "finishedAt": "2026-03-19T03:01:28.257Z",
+  "rounds": 2,
   "finalValidation": {
     "status": "pass",
     "recommendation": "complete",
-    "summary": "[deterministic] all deterministic checks passed for engineering-vllm-inference-blueprint | [judge] Deterministic gates are reported as passing, and the implementation evidence indicates the full requested streaming/non-streaming split was added on the `ChatCompletionRequest.stream` field, with SSE framing normalized for OpenAI-compatible chat-completions streaming and covered by a handler-level automated test.",
+    "summary": "[deterministic] all deterministic checks passed for engineering-vllm-inference-blueprint | [judge] Approve for production based on the latest evidence. The prior failing workspace test gate was repaired in the current round, the latest track reports clean formatting/lint/test gates, and the implementation summary covers the required scope: actual-cost settlement capped by pre-authorization, request-path policy enforcement, asynchronous draining of vLLM child stdout/stderr, and removal of panic-on-dependency-failure behavior in job handling, with tests updated for the billing and handled-error regressions.",
     "findings": [],
     "scores": {
       "deterministic": 1,
@@ -61,15 +53,6 @@
       "correctness": 1
     },
     "evidence": [
-      {
-        "kind": "test",
-        "label": "cargo fmt --all",
-        "value": "",
-        "metadata": {
-          "passed": "true",
-          "exitCode": "0"
-        }
-      },
       {
         "kind": "test",
         "label": "cargo fmt --all --check",
@@ -82,7 +65,7 @@
       {
         "kind": "test",
         "label": "cargo clippy --workspace -- -D warnings",
-        "value": "Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.42s\nwarning: the following packages contain code that will be rejected by a future version of Rust: trie-db v0.29.1\nnote: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`",
+        "value": "Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.41s\nwarning: the following packages contain code that will be rejected by a future version of Rust: trie-db v0.29.1\nnote: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`",
         "metadata": {
           "passed": "true",
           "exitCode": "0"
@@ -91,7 +74,7 @@
       {
         "kind": "test",
         "label": "cargo test --workspace",
-        "value": "running 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nrunning 18 tests\ntest test_config_default_max_concurrent_requests ... ok\ntest test_semaphore_limits_concurrency ... ok\ntest test_request_guard_records_success ... ok\ntest test_sse_done_marker_present ... ok\ntest test_request_guard_defaults_to_error ... ok\ntest test_request_guard_records_tokens_on_drop ... ok\ntest test_sse_no_usage_in_chunks ... ok\ntest test_request_guard_tracks_active_requests ... ok\ntest test_metrics_gather_produces_valid_output ... ok\ntest test_semaphore_zero_config_means_unlimited ... ok\ntest test_billing_calculate_cost ... ok\ntest test_sse_usage_extraction ... ok\ntest test_upstream_error_returns_error_status ... ok\ntest test_streaming_via_wiremock ... ok\ntest test_non_streaming_via_wiremock ... ok\ntest test_streaming_through_handler ... ok\ntest test_stream_field_defaults_to_false ... ok\ntest test_non_streaming_through_handler ... ok\n\ntest result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s\n\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\nFinished `test` profile [unoptimized + debuginfo] target(s) in 0.45s\nwarning: the following packages contain code that will be rejected by a future version of Rust: trie-db v0.29.1\nnote: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`\n     Running unittests src/lib.rs (target/debug/deps/vllm_inference-5989e26cf39f161d)\n     Running unittests src/main.rs (target/debug/deps/vllm_operator-0e53b3beb81f7323)\n     Running tests/server_tests.rs (target/debug/deps/server_tests-6e6fcc87fd21ebe7)\n   Doc-tests vllm_inference",
+        "value": "running 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nrunning 23 tests\ntest test_config_default_max_concurrent_requests ... ok\ntest test_request_guard_records_tokens_on_drop ... ok\ntest test_metrics_gather_produces_valid_output ... ok\ntest test_request_guard_defaults_to_error ... ok\ntest test_request_guard_tracks_active_requests ... ok\ntest test_request_guard_records_success ... ok\ntest test_billing_actual_cost_less_than_preauth ... ok\ntest test_billing_calculate_cost ... ok\ntest test_billing_actual_cost_exceeds_preauth_cap ... ok\ntest test_billing_zero_usage_yields_zero_charge ... ok\ntest test_sse_no_usage_in_chunks ... ok\ntest test_sse_done_marker_present ... ok\ntest test_sse_usage_extraction ... ok\ntest test_run_inference_returns_error_on_connection_failure ... ok\ntest test_semaphore_limits_concurrency ... ok\ntest test_semaphore_zero_config_means_unlimited ... ok\ntest test_streaming_via_wiremock ... ok\ntest test_non_streaming_via_wiremock ... ok\ntest test_upstream_error_returns_error_status ... ok\ntest test_max_spend_per_request_rejection ... ok\ntest test_non_streaming_through_handler ... ok\ntest test_stream_field_defaults_to_false ... ok\ntest test_streaming_through_handler ... ok\n\ntest result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s\n\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\nFinished `test` profile [unoptimized + debuginfo] target(s) in 0.47s\nwarning: the following packages contain code that will be rejected by a future version of Rust: trie-db v0.29.1\nnote: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`\n     Running unittests src/lib.rs (target/debug/deps/vllm_inference-5989e26cf39f161d)\n     Running unittests src/main.rs (target/debug/deps/vllm_operator-0e53b3beb81f7323)\n     Running tests/server_tests.rs (target/debug/deps/server_tests-6e6fcc87fd21ebe7)\n   Doc-tests vllm_inference",
         "metadata": {
           "passed": "true",
           "exitCode": "0"
@@ -118,7 +101,7 @@
       {
         "kind": "test",
         "label": "cd /home/drew/code/vllm-inference-blueprint && cargo test --workspace",
-        "value": "running 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nrunning 18 tests\ntest test_config_default_max_concurrent_requests ... ok\ntest test_request_guard_records_success ... ok\ntest test_request_guard_tracks_active_requests ... ok\ntest test_request_guard_records_tokens_on_drop ... ok\ntest test_semaphore_limits_concurrency ... ok\ntest test_request_guard_defaults_to_error ... ok\ntest test_sse_usage_extraction ... ok\ntest test_sse_done_marker_present ... ok\ntest test_sse_no_usage_in_chunks ... ok\ntest test_semaphore_zero_config_means_unlimited ... ok\ntest test_metrics_gather_produces_valid_output ... ok\ntest test_billing_calculate_cost ... ok\ntest test_upstream_error_returns_error_status ... ok\ntest test_non_streaming_via_wiremock ... ok\ntest test_streaming_via_wiremock ... ok\ntest test_stream_field_defaults_to_false ... ok\ntest test_streaming_through_handler ... ok\ntest test_non_streaming_through_handler ... ok\n\ntest result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s\n\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\nFinished `test` profile [unoptimized + debuginfo] target(s) in 0.45s\nwarning: the following packages contain code that will be rejected by a future version of Rust: trie-db v0.29.1\nnote: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`\n     Running unittests src/lib.rs (target/debug/deps/vllm_inference-5989e26cf39f161d)\n     Running unittests src/main.rs (target/debug/deps/vllm_operator-0e53b3beb81f7323)\n     Running tests/server_tests.rs (target/debug/deps/server_tests-6e6fcc87fd21ebe7)\n   Doc-tests vllm_inference",
+        "value": "running 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nrunning 23 tests\ntest test_config_default_max_concurrent_requests ... ok\ntest test_request_guard_records_success ... ok\ntest test_metrics_gather_produces_valid_output ... ok\ntest test_billing_calculate_cost ... ok\ntest test_request_guard_defaults_to_error ... ok\ntest test_request_guard_records_tokens_on_drop ... ok\ntest test_semaphore_limits_concurrency ... ok\ntest test_request_guard_tracks_active_requests ... ok\ntest test_sse_done_marker_present ... ok\ntest test_semaphore_zero_config_means_unlimited ... ok\ntest test_sse_no_usage_in_chunks ... ok\ntest test_sse_usage_extraction ... ok\ntest test_billing_actual_cost_exceeds_preauth_cap ... ok\ntest test_billing_zero_usage_yields_zero_charge ... ok\ntest test_billing_actual_cost_less_than_preauth ... ok\ntest test_run_inference_returns_error_on_connection_failure ... ok\ntest test_non_streaming_via_wiremock ... ok\ntest test_streaming_via_wiremock ... ok\ntest test_upstream_error_returns_error_status ... ok\ntest test_max_spend_per_request_rejection ... ok\ntest test_non_streaming_through_handler ... ok\ntest test_stream_field_defaults_to_false ... ok\ntest test_streaming_through_handler ... ok\n\ntest result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s\n\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\nFinished `test` profile [unoptimized + debuginfo] target(s) in 0.45s\nwarning: the following packages contain code that will be rejected by a future version of Rust: trie-db v0.29.1\nnote: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`\n     Running unittests src/lib.rs (target/debug/deps/vllm_inference-5989e26cf39f161d)\n     Running unittests src/main.rs (target/debug/deps/vllm_operator-0e53b3beb81f7323)\n     Running tests/server_tests.rs (target/debug/deps/server_tests-6e6fcc87fd21ebe7)\n   Doc-tests vllm_inference",
         "metadata": {
           "passed": "true",
           "exitCode": "0"
@@ -127,16 +110,16 @@
       {
         "kind": "log",
         "label": "stdout",
-        "value": "{\"type\":\"thread.started\",\"thread_id\":\"019d03e6-ed42-7d31-8b26-9c504e06ecc6\"}\n{\"type\":\"turn.started\"}\n{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"{\\\"status\\\":\\\"pass\\\",\\\"recommendation\\\":\\\"complete\\\",\\\"summary\\\":\\\"Deterministic gates are reported as passing, and the implementation evidence indicates the full requested streaming/non-streaming split was added on the `ChatCompletionRequest.stream` field, with SSE framing normalized for OpenAI-compatible chat-completions streaming and covered by a handler-level automated test.\\\",\\\"findings\\\":[],\\\"scores\\\":{\\\"quality\\\":9,\\\"correctness\\\":9},\\\"evidence\\\":[{\\\"kind\\\":\\\"note\\\",\\\"label\\\":\\\"deterministic_checks\\\",\\\"value\\\":\\\"Evidence states the implementation is 'complete and passing all checks' and that 'All 18 tests pass,' with the review instructions explicitly saying the separate evaluator already ran and verified `cargo fmt --all`, `cargo clippy --workspace -- -D warnings`, and `cargo test --workspace`.\\\"},{\\\"kind\\\":\\\"note\\\",\\\"label\\\":\\\"request_model_change\\\",\\\"value\\\":\\\"Implementation evidence cites `server.rs:69` adding `ChatCompletionRequest.stream` with `#[serde(default)]`, which satisfies the requirement to read streaming behavior from the request body and preserve absent/false as non-streaming.\\\"},{\\\"kind\\\":\\\"note\\\",\\\"label\\\":\\\"streaming_behavior\\\",\\\"value\\\":\\\"The implementation summary states that `stream=true` now triggers upstream vLLM chat completions streaming and returns a streaming HTTP response instead of buffering the full completion, while preserving the existing synchronous path for non-streaming requests.\\\"},{\\\"kind\\\":\\\"note\\\",\\\"label\\\":\\\"sse_contract\\\",\\\"value\\\":\\\"The evidence describes OpenAI-compatible SSE framing with per-chunk `data: {json}\\\\\\\\n\\\\\\\\n` events and a final `data: [DONE]\\\\\\\\n\\\\\\\\n` terminator, with upstream chunk normalization handled in the proxy layer rather than leaking vLLM-specific framing.\\\"},{\\\"kind\\\":\\\"note\\\",\\\"label\\\":\\\"test_coverage\\\",\\\"value\\\":\\\"Evidence says a new handler-level automated streaming test was added using mocked/stubbed upstream streaming, and that it verifies SSE content type, `data:` event framing, `\\\\\\\\n\\\\\\\\n` separators, JSON-parsable chunk payload, and the final `[DONE]` event.\\\"}]}\"}}\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":16666,\"cached_input_tokens\":3456,\"output_tokens\":938}}",
+        "value": "{\"type\":\"thread.started\",\"thread_id\":\"019d0409-c94f-7ba1-8a25-0e7a38551f68\"}\n{\"type\":\"turn.started\"}\n{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"{\\\"status\\\":\\\"pass\\\",\\\"recommendation\\\":\\\"complete\\\",\\\"summary\\\":\\\"Approve for production based on the latest evidence. The prior failing workspace test gate was repaired in the current round, the latest track reports clean formatting/lint/test gates, and the implementation summary covers the required scope: actual-cost settlement capped by pre-authorization, request-path policy enforcement, asynchronous draining of vLLM child stdout/stderr, and removal of panic-on-dependency-failure behavior in job handling, with tests updated for the billing and handled-error regressions.\\\",\\\"findings\\\":[],\\\"scores\\\":{\\\"quality\\\":9,\\\"correctness\\\":9},\\\"evidence\\\":[{\\\"kind\\\":\\\"note\\\",\\\"label\\\":\\\"deterministic-gates\\\",\\\"value\\\":\\\"Latest track result states 'All gates are green,' which supersedes the prior round's recorded cargo test failure.\\\"},{\\\"kind\\\":\\\"note\\\",\\\"label\\\":\\\"billing-settlement\\\",\\\"value\\\":\\\"Implementation summary for server.rs handle_non_streaming says calculate_cost derives actual cost from metered prompt/completion tokens and configured pricing, and charge_amount = actual_cost.min(preauth_amount), so final claim is no longer the full pre-authorized spend_auth.amount.\\\"},{\\\"kind\\\":\\\"note\\\",\\\"label\\\":\\\"request-policy-enforcement\\\",\\\"value\\\":\\\"Implementation summary indicates max_spend_per_request and min_credit_balance are enforced on the request path so over-policy requests fail cleanly before billing/processing proceeds.\\\"},{\\\"kind\\\":\\\"note\\\",\\\"label\\\":\\\"vllm-process-hardening\\\",\\\"value\\\":\\\"Implementation summary says vllm.rs now actively drains both child stdout and stderr asynchronously and forwards output into tracing, removing the unread-pipe backpressure hazard while preserving the child-process model.\\\"},{\\\"kind\\\":\\\"note\\\",\\\"label\\\":\\\"job-error-propagation\\\",\\\"value\\\":\\\"Implementation summary says lib.rs removes expect-based panics from on-chain job handling so downstream failures such as vLLM downtime surface as handled job errors, and adjacent tests were updated to cover the billing settlement regression and a non-panicking failure path.\\\"}]}\"}}\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":15105,\"cached_input_tokens\":2432,\"output_tokens\":1712}}",
         "metadata": {
-          "durationMs": "25853",
+          "durationMs": "44864",
           "providerId": "codex",
           "exitCode": "0",
           "providerFormat": "jsonl",
-          "sessionId": "019d03e6-ed42-7d31-8b26-9c504e06ecc6",
-          "inputTokens": "16666",
-          "cachedInputTokens": "3456",
-          "outputTokens": "938"
+          "sessionId": "019d0409-c94f-7ba1-8a25-0e7a38551f68",
+          "inputTokens": "15105",
+          "cachedInputTokens": "2432",
+          "outputTokens": "1712"
         }
       },
       {
@@ -144,47 +127,47 @@
         "label": "stderr",
         "value": "",
         "metadata": {
-          "durationMs": "25853",
+          "durationMs": "44864",
           "providerId": "codex",
           "exitCode": "0",
           "providerFormat": "jsonl",
-          "sessionId": "019d03e6-ed42-7d31-8b26-9c504e06ecc6",
-          "inputTokens": "16666",
-          "cachedInputTokens": "3456",
-          "outputTokens": "938"
+          "sessionId": "019d0409-c94f-7ba1-8a25-0e7a38551f68",
+          "inputTokens": "15105",
+          "cachedInputTokens": "2432",
+          "outputTokens": "1712"
         }
       },
       {
         "kind": "note",
-        "label": "deterministic_checks",
-        "value": "Evidence states the implementation is 'complete and passing all checks' and that 'All 18 tests pass,' with the review instructions explicitly saying the separate evaluator already ran and verified `cargo fmt --all`, `cargo clippy --workspace -- -D warnings`, and `cargo test --workspace`."
+        "label": "deterministic-gates",
+        "value": "Latest track result states 'All gates are green,' which supersedes the prior round's recorded cargo test failure."
       },
       {
         "kind": "note",
-        "label": "request_model_change",
-        "value": "Implementation evidence cites `server.rs:69` adding `ChatCompletionRequest.stream` with `#[serde(default)]`, which satisfies the requirement to read streaming behavior from the request body and preserve absent/false as non-streaming."
+        "label": "billing-settlement",
+        "value": "Implementation summary for server.rs handle_non_streaming says calculate_cost derives actual cost from metered prompt/completion tokens and configured pricing, and charge_amount = actual_cost.min(preauth_amount), so final claim is no longer the full pre-authorized spend_auth.amount."
       },
       {
         "kind": "note",
-        "label": "streaming_behavior",
-        "value": "The implementation summary states that `stream=true` now triggers upstream vLLM chat completions streaming and returns a streaming HTTP response instead of buffering the full completion, while preserving the existing synchronous path for non-streaming requests."
+        "label": "request-policy-enforcement",
+        "value": "Implementation summary indicates max_spend_per_request and min_credit_balance are enforced on the request path so over-policy requests fail cleanly before billing/processing proceeds."
       },
       {
         "kind": "note",
-        "label": "sse_contract",
-        "value": "The evidence describes OpenAI-compatible SSE framing with per-chunk `data: {json}\\n\\n` events and a final `data: [DONE]\\n\\n` terminator, with upstream chunk normalization handled in the proxy layer rather than leaking vLLM-specific framing."
+        "label": "vllm-process-hardening",
+        "value": "Implementation summary says vllm.rs now actively drains both child stdout and stderr asynchronously and forwards output into tracing, removing the unread-pipe backpressure hazard while preserving the child-process model."
       },
       {
         "kind": "note",
-        "label": "test_coverage",
-        "value": "Evidence says a new handler-level automated streaming test was added using mocked/stubbed upstream streaming, and that it verifies SSE content type, `data:` event framing, `\\n\\n` separators, JSON-parsable chunk payload, and the final `[DONE]` event."
+        "label": "job-error-propagation",
+        "value": "Implementation summary says lib.rs removes expect-based panics from on-chain job handling so downstream failures such as vLLM downtime surface as handled job errors, and adjacent tests were updated to cover the billing settlement regression and a non-panicking failure path."
       }
     ]
   },
   "outcome": {
     "status": "completed",
-    "summary": "[deterministic] all deterministic checks passed for engineering-vllm-inference-blueprint | [judge] Deterministic gates are reported as passing, and the implementation evidence indicates the full requested streaming/non-streaming split was added on the `ChatCompletionRequest.stream` field, with SSE framing normalized for OpenAI-compatible chat-completions streaming and covered by a handler-level automated test.",
+    "summary": "[deterministic] all deterministic checks passed for engineering-vllm-inference-blueprint | [judge] Approve for production based on the latest evidence. The prior failing workspace test gate was repaired in the current round, the latest track reports clean formatting/lint/test gates, and the implementation summary covers the required scope: actual-cost settlement capped by pre-authorization, request-path policy enforcement, asynchronous draining of vLLM child stdout/stderr, and removal of panic-on-dependency-failure behavior in job handling, with tests updated for the billing and handled-error regressions.",
     "validated": true
   },
-  "reason": "[deterministic] all deterministic checks passed for engineering-vllm-inference-blueprint | [judge] Deterministic gates are reported as passing, and the implementation evidence indicates the full requested streaming/non-streaming split was added on the `ChatCompletionRequest.stream` field, with SSE framing normalized for OpenAI-compatible chat-completions streaming and covered by a handler-level automated test."
+  "reason": "[deterministic] all deterministic checks passed for engineering-vllm-inference-blueprint | [judge] Approve for production based on the latest evidence. The prior failing workspace test gate was repaired in the current round, the latest track reports clean formatting/lint/test gates, and the implementation summary covers the required scope: actual-cost settlement capped by pre-authorization, request-path policy enforcement, asynchronous draining of vLLM child stdout/stderr, and removal of panic-on-dependency-failure behavior in job handling, with tests updated for the billing and handled-error regressions."
 }

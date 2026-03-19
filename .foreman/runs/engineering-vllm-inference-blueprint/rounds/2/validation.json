@@ -1,0 +1,122 @@
+{
+  "status": "pass",
+  "recommendation": "complete",
+  "summary": "[deterministic] all deterministic checks passed for engineering-vllm-inference-blueprint | [judge] Approve for production based on the latest evidence. The prior failing workspace test gate was repaired in the current round, the latest track reports clean formatting/lint/test gates, and the implementation summary covers the required scope: actual-cost settlement capped by pre-authorization, request-path policy enforcement, asynchronous draining of vLLM child stdout/stderr, and removal of panic-on-dependency-failure behavior in job handling, with tests updated for the billing and handled-error regressions.",
+  "findings": [],
+  "scores": {
+    "deterministic": 1,
+    "quality": 1,
+    "correctness": 1
+  },
+  "evidence": [
+    {
+      "kind": "test",
+      "label": "cargo fmt --all --check",
+      "value": "",
+      "metadata": {
+        "passed": "true",
+        "exitCode": "0"
+      }
+    },
+    {
+      "kind": "test",
+      "label": "cargo clippy --workspace -- -D warnings",
+      "value": "Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.41s\nwarning: the following packages contain code that will be rejected by a future version of Rust: trie-db v0.29.1\nnote: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`",
+      "metadata": {
+        "passed": "true",
+        "exitCode": "0"
+      }
+    },
+    {
+      "kind": "test",
+      "label": "cargo test --workspace",
+      "value": "running 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nrunning 23 tests\ntest test_config_default_max_concurrent_requests ... ok\ntest test_request_guard_records_tokens_on_drop ... ok\ntest test_metrics_gather_produces_valid_output ... ok\ntest test_request_guard_defaults_to_error ... ok\ntest test_request_guard_tracks_active_requests ... ok\ntest test_request_guard_records_success ... ok\ntest test_billing_actual_cost_less_than_preauth ... ok\ntest test_billing_calculate_cost ... ok\ntest test_billing_actual_cost_exceeds_preauth_cap ... ok\ntest test_billing_zero_usage_yields_zero_charge ... ok\ntest test_sse_no_usage_in_chunks ... ok\ntest test_sse_done_marker_present ... ok\ntest test_sse_usage_extraction ... ok\ntest test_run_inference_returns_error_on_connection_failure ... ok\ntest test_semaphore_limits_concurrency ... ok\ntest test_semaphore_zero_config_means_unlimited ... ok\ntest test_streaming_via_wiremock ... ok\ntest test_non_streaming_via_wiremock ... ok\ntest test_upstream_error_returns_error_status ... ok\ntest test_max_spend_per_request_rejection ... ok\ntest test_non_streaming_through_handler ... ok\ntest test_stream_field_defaults_to_false ... ok\ntest test_streaming_through_handler ... ok\n\ntest result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s\n\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\nFinished `test` profile [unoptimized + debuginfo] target(s) in 0.47s\nwarning: the following packages contain code that will be rejected by a future version of Rust: trie-db v0.29.1\nnote: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`\n     Running unittests src/lib.rs (target/debug/deps/vllm_inference-5989e26cf39f161d)\n     Running unittests src/main.rs (target/debug/deps/vllm_operator-0e53b3beb81f7323)\n     Running tests/server_tests.rs (target/debug/deps/server_tests-6e6fcc87fd21ebe7)\n   Doc-tests vllm_inference",
+      "metadata": {
+        "passed": "true",
+        "exitCode": "0"
+      }
+    },
+    {
+      "kind": "test",
+      "label": "cd /home/drew/code/vllm-inference-blueprint && cargo fmt --all -- --check",
+      "value": "",
+      "metadata": {
+        "passed": "true",
+        "exitCode": "0"
+      }
+    },
+    {
+      "kind": "test",
+      "label": "cd /home/drew/code/vllm-inference-blueprint && cargo clippy --workspace -- -D warnings",
+      "value": "Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.44s\nwarning: the following packages contain code that will be rejected by a future version of Rust: trie-db v0.29.1\nnote: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`",
+      "metadata": {
+        "passed": "true",
+        "exitCode": "0"
+      }
+    },
+    {
+      "kind": "test",
+      "label": "cd /home/drew/code/vllm-inference-blueprint && cargo test --workspace",
+      "value": "running 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nrunning 23 tests\ntest test_config_default_max_concurrent_requests ... ok\ntest test_request_guard_records_success ... ok\ntest test_metrics_gather_produces_valid_output ... ok\ntest test_billing_calculate_cost ... ok\ntest test_request_guard_defaults_to_error ... ok\ntest test_request_guard_records_tokens_on_drop ... ok\ntest test_semaphore_limits_concurrency ... ok\ntest test_request_guard_tracks_active_requests ... ok\ntest test_sse_done_marker_present ... ok\ntest test_semaphore_zero_config_means_unlimited ... ok\ntest test_sse_no_usage_in_chunks ... ok\ntest test_sse_usage_extraction ... ok\ntest test_billing_actual_cost_exceeds_preauth_cap ... ok\ntest test_billing_zero_usage_yields_zero_charge ... ok\ntest test_billing_actual_cost_less_than_preauth ... ok\ntest test_run_inference_returns_error_on_connection_failure ... ok\ntest test_non_streaming_via_wiremock ... ok\ntest test_streaming_via_wiremock ... ok\ntest test_upstream_error_returns_error_status ... ok\ntest test_max_spend_per_request_rejection ... ok\ntest test_non_streaming_through_handler ... ok\ntest test_stream_field_defaults_to_false ... ok\ntest test_streaming_through_handler ... ok\n\ntest result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s\n\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\nFinished `test` profile [unoptimized + debuginfo] target(s) in 0.45s\nwarning: the following packages contain code that will be rejected by a future version of Rust: trie-db v0.29.1\nnote: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`\n     Running unittests src/lib.rs (target/debug/deps/vllm_inference-5989e26cf39f161d)\n     Running unittests src/main.rs (target/debug/deps/vllm_operator-0e53b3beb81f7323)\n     Running tests/server_tests.rs (target/debug/deps/server_tests-6e6fcc87fd21ebe7)\n   Doc-tests vllm_inference",
+      "metadata": {
+        "passed": "true",
+        "exitCode": "0"
+      }
+    },
+    {
+      "kind": "log",
+      "label": "stdout",
+      "value": "{\"type\":\"thread.started\",\"thread_id\":\"019d0409-c94f-7ba1-8a25-0e7a38551f68\"}\n{\"type\":\"turn.started\"}\n{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"{\\\"status\\\":\\\"pass\\\",\\\"recommendation\\\":\\\"complete\\\",\\\"summary\\\":\\\"Approve for production based on the latest evidence. The prior failing workspace test gate was repaired in the current round, the latest track reports clean formatting/lint/test gates, and the implementation summary covers the required scope: actual-cost settlement capped by pre-authorization, request-path policy enforcement, asynchronous draining of vLLM child stdout/stderr, and removal of panic-on-dependency-failure behavior in job handling, with tests updated for the billing and handled-error regressions.\\\",\\\"findings\\\":[],\\\"scores\\\":{\\\"quality\\\":9,\\\"correctness\\\":9},\\\"evidence\\\":[{\\\"kind\\\":\\\"note\\\",\\\"label\\\":\\\"deterministic-gates\\\",\\\"value\\\":\\\"Latest track result states 'All gates are green,' which supersedes the prior round's recorded cargo test failure.\\\"},{\\\"kind\\\":\\\"note\\\",\\\"label\\\":\\\"billing-settlement\\\",\\\"value\\\":\\\"Implementation summary for server.rs handle_non_streaming says calculate_cost derives actual cost from metered prompt/completion tokens and configured pricing, and charge_amount = actual_cost.min(preauth_amount), so final claim is no longer the full pre-authorized spend_auth.amount.\\\"},{\\\"kind\\\":\\\"note\\\",\\\"label\\\":\\\"request-policy-enforcement\\\",\\\"value\\\":\\\"Implementation summary indicates max_spend_per_request and min_credit_balance are enforced on the request path so over-policy requests fail cleanly before billing/processing proceeds.\\\"},{\\\"kind\\\":\\\"note\\\",\\\"label\\\":\\\"vllm-process-hardening\\\",\\\"value\\\":\\\"Implementation summary says vllm.rs now actively drains both child stdout and stderr asynchronously and forwards output into tracing, removing the unread-pipe backpressure hazard while preserving the child-process model.\\\"},{\\\"kind\\\":\\\"note\\\",\\\"label\\\":\\\"job-error-propagation\\\",\\\"value\\\":\\\"Implementation summary says lib.rs removes expect-based panics from on-chain job handling so downstream failures such as vLLM downtime surface as handled job errors, and adjacent tests were updated to cover the billing settlement regression and a non-panicking failure path.\\\"}]}\"}}\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":15105,\"cached_input_tokens\":2432,\"output_tokens\":1712}}",
+      "metadata": {
+        "durationMs": "44864",
+        "providerId": "codex",
+        "exitCode": "0",
+        "providerFormat": "jsonl",
+        "sessionId": "019d0409-c94f-7ba1-8a25-0e7a38551f68",
+        "inputTokens": "15105",
+        "cachedInputTokens": "2432",
+        "outputTokens": "1712"
+      }
+    },
+    {
+      "kind": "log",
+      "label": "stderr",
+      "value": "",
+      "metadata": {
+        "durationMs": "44864",
+        "providerId": "codex",
+        "exitCode": "0",
+        "providerFormat": "jsonl",
+        "sessionId": "019d0409-c94f-7ba1-8a25-0e7a38551f68",
+        "inputTokens": "15105",
+        "cachedInputTokens": "2432",
+        "outputTokens": "1712"
+      }
+    },
+    {
+      "kind": "note",
+      "label": "deterministic-gates",
+      "value": "Latest track result states 'All gates are green,' which supersedes the prior round's recorded cargo test failure."
+    },
+    {
+      "kind": "note",
+      "label": "billing-settlement",
+      "value": "Implementation summary for server.rs handle_non_streaming says calculate_cost derives actual cost from metered prompt/completion tokens and configured pricing, and charge_amount = actual_cost.min(preauth_amount), so final claim is no longer the full pre-authorized spend_auth.amount."
+    },
+    {
+      "kind": "note",
+      "label": "request-policy-enforcement",
+      "value": "Implementation summary indicates max_spend_per_request and min_credit_balance are enforced on the request path so over-policy requests fail cleanly before billing/processing proceeds."
+    },
+    {
+      "kind": "note",
+      "label": "vllm-process-hardening",
+      "value": "Implementation summary says vllm.rs now actively drains both child stdout and stderr asynchronously and forwards output into tracing, removing the unread-pipe backpressure hazard while preserving the child-process model."
+    },
+    {
+      "kind": "note",
+      "label": "job-error-propagation",
+      "value": "Implementation summary says lib.rs removes expect-based panics from on-chain job handling so downstream failures such as vLLM downtime surface as handled job errors, and adjacent tests were updated to cover the billing settlement regression and a non-panicking failure path."
+    }
+  ]
+}

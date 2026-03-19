@@ -29,7 +29,7 @@ k256 = { workspace = true }
 
 # Web framework (for OpenAI-compatible HTTP server)
 axum = { version = "0.7", features = ["json", "macros"] }
-tower-http = { version = "0.5", features = ["cors", "trace"] }
+tower-http = { version = "0.5", features = ["cors", "limit", "trace", "timeout"] }
 
 # Config
 config = "0.14"

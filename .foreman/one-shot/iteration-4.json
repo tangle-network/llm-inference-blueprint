@@ -1,0 +1,67 @@
+{
+  "iteration": 4,
+  "workerExitCode": 0,
+  "checks": [
+    {
+      "cmd": "cd /home/drew/code/vllm-inference-blueprint && cargo fmt --all -- --check",
+      "pass": true
+    },
+    {
+      "cmd": "cd /home/drew/code/vllm-inference-blueprint && cargo clippy --workspace -- -D warnings",
+      "pass": true
+    },
+    {
+      "cmd": "cd /home/drew/code/vllm-inference-blueprint && cargo test --workspace",
+      "pass": true
+    }
+  ],
+  "judges": [
+    {
+      "name": "billing_security",
+      "score": 7,
+      "findings": [
+        "CRITICAL: claimPayment settles the FULL pre-authorized amount on-chain — actual_amount is logged but never used for settlement. Users are systematically overcharged. The 1.5x preauth ceiling (line 568-569) mitigates but doesn't fix: a request using 10% of max_tokens still pays 1.5x the worst-case estimate.",
+        "CRITICAL: No refund/release mechanism when vLLM fails AFTER authorize_spend succeeds (lines 678-688, 727-728). Funds are locked until SpendAuth expiry. Documented but still causes real money loss — operator should attempt a releaseSpend or the contract needs one.",
+        "MEDIUM: Nonce store persistence is optional (nonce_store_path defaults to None). Operator restart clears all nonces, allowing replay of any unexpired SpendAuth signatures. This should default to a path, not be opt-in.",
+        "MEDIUM: service_id is Option<u64> (config.rs:59) — when None, the service_id check (server.rs:461-473) is skipped entirely. A SpendAuth signed for a different service would pass validation and waste gas on an authorizeSpend the contract rejects.",
+        "LOW: CorsLayer::permissive() on a payment API (line 182) allows any origin to submit billing requests. Should restrict to known frontend origins or require API keys.",
+        "LOW: spend_auth.amount re-parsed with unwrap_or(0) at line 565 after already being validated at line 393. If somehow different (impossible in current flow), the 0 value bypasses the preauth ceiling check silently.",
+        "INFO: Billing failures in settle_billing are logged at error level but the response to the user has already been sent (fire-and-forget pattern at lines 698-708, 844-855). The operator absorbs the loss silently — no alerting mechanism beyond logs."
+      ]
+    },
+    {
+      "name": "reliability",
+      "score": 7,
+      "findings": [
+        "MEDIUM: Watchdog respawn loop (lib.rs:261-285) has no max retry count or circuit breaker. If vLLM can never start (GPU failure, corrupt model, OOM), this loops forever with backoff capped at 120s, consuming resources indefinitely. A max_respawn_attempts config with an alert/shutdown after exhaustion would prevent a zombie operator.",
+        "MEDIUM: ctrl_c handler in watchdog (lib.rs:242) conflicts with BlueprintRunner's own shutdown handling. Both install signal handlers — race condition determines which fires first. If BlueprintRunner's handler wins, the watchdog never cleans up; if the watchdog wins, BlueprintRunner may not drain gracefully.",
+        "LOW: line_buf overflow handling (server.rs:775-782) clears the entire buffer, discarding any partial SSE line. This can silently corrupt a streaming response mid-flight. Should find the last newline and keep the tail, or abort the stream cleanly.",
+        "LOW: settle_billing logs actual_cost vs preauth but the contract always settles full preauth (documented at server.rs:322-325). The 1.5x ceiling (server.rs:568) mitigates but doesn't eliminate user overcharging — e.g., a request that uses 100 tokens but preauthed for 1.5x of max_tokens=4096 still overpays significantly.",
+        "INFO: Provider is rebuilt on every billing RPC call (billing.rs:156-158, 217-219). Under high throughput this creates unnecessary TCP connections. A persistent provider would reduce latency and connection churn.",
+        "PASS: stdout/stderr drained via tokio BufReader spawned tasks (vllm.rs:73-90) — no pipe deadlock risk.",
+        "PASS: Crash recovery implemented via health-check watchdog with exponential backoff (lib.rs:234-287).",
+        "PASS: No .expect()/.unwrap() in fallible production paths. The two .expect() calls (server.rs:891,936) are on Response::builder() with hardcoded valid inputs — infallible in practice.",
+        "PASS: Request timeouts implemented at three layers: global TimeoutLayer (server.rs:179), per-chunk idle timeout for SSE (server.rs:744-762), and reqwest 300s client timeout (vllm.rs:23,93).",
+        "PASS: Semaphore concurrency limiting correct — try_acquire_owned returns 429 (server.rs:366), permit held through streaming via background task (server.rs:881), per-account limiting via RAII guard (server.rs:583-603)."
+      ]
+    },
+    {
+      "name": "code_quality",
+      "score": 7,
+      "findings": [
+        "thiserror is in Cargo.toml but never used — no custom error types defined. Either remove the dep or define a proper error enum instead of anyhow::Result + RunnerError::Other everywhere.",
+        "SSE line-parsing logic is duplicated between server.rs (lines 768-831) and test_sse_chunk_boundary_splits (lines 266-299). Extract into a testable function to avoid drift.",
+        "OnceLock<VllmEndpoint> (lib.rs:54) can only be set once. After a vLLM respawn, register_vllm_endpoint silently no-ops (line 77: `let _ = VLLM_ENDPOINT.set(endpoint)`). Works by accident because host:port don't change, but if config were updated on respawn, the stale endpoint would be used. Should be an ArcSwap or RwLock.",
+        "CorsLayer::permissive() (server.rs:182) in production allows any origin. Should be configurable or restricted to known frontends.",
+        "Watchdog loop (lib.rs:253) checks `vllm_handle.is_healthy()` using the original Arc<VllmProcess> after shutdown+respawn. Health check works via HTTP to the same host:port, but the process was killed — `_live_handle` is the live process, yet it's never used for health checks. If the new process binds a different port, health checks would target the wrong endpoint.",
+        "settle_billing (server.rs:327-355) logs charge_amount but the contract call (billing.claim_payment) ignores it — claimPayment always settles full pre-auth. The comment documents this, but the code calculates actual_cost and charge_amount as if partial settlement works, which is misleading. Either remove the dead calculation or gate it behind a future flag.",
+        "No tests for the on-chain job handler (run_inference). The TangleArg extraction makes it hard to call directly, but the function could be refactored to accept the raw InferenceRequest, making it testable without the extractor.",
+        "uuid and bytes crates in Cargo.toml appear unused in any source file — dead dependencies.",
+        "Per-account concurrency guard uses std::sync::RwLock (server.rs:135) which is fine for brief holds, but the lock is acquired inside an async handler. If the map grows very large under load, contention could block the runtime thread. tokio::sync::RwLock or dashmap would be safer at scale.",
+        "No request-level tracing (request ID / trace ID). The metrics guard tracks counts and durations, but individual request correlation across log lines (billing, vLLM proxy, settlement) is absent."
+      ]
+    }
+  ],
+  "avgScore": 7,
+  "threshold": 8
+}

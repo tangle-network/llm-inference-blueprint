@@ -5,7 +5,8 @@
     "validated-by: cargo fmt --all --check",
     "validated-by: cargo clippy --workspace -- -D warnings",
     "validated-by: cargo test --workspace",
-    "validated-by: cd /home/drew/code/vllm-inference-blueprint && cargo fmt --all -- --check"
+    "validated-by: cd /home/drew/code/vllm-inference-blueprint && cargo fmt --all -- --check",
+    "validated-by: cd /home/drew/code/vllm-inference-blueprint && cargo clippy --workspace -- -D warnings"
   ],
   "badPatterns": [],
   "repairRecipes": [
@@ -18,6 +19,9 @@
     "repair: Independent code inspection was impossible, so there is no trustworthy basis for approval",
     "repair: Mandatory verification gates are not evidenced as passing",
     "repair: Every major success criterion remains unverified",
-    "repair: Reported implementation surface is materially inconsistent with the requested scope"
+    "repair: Reported implementation surface is materially inconsistent with the requested scope",
+    "repair: Primary repository inspection was impossible in this review session",
+    "repair: Required quality gates were not independently proven",
+    "repair: Streaming wire-format success criteria remain unverified at review time"
   ]
 }

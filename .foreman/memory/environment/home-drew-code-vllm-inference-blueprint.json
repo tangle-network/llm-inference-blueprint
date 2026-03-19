@@ -23,6 +23,9 @@
     "Independent code inspection was impossible, so there is no trustworthy basis for approval",
     "Mandatory verification gates are not evidenced as passing",
     "Every major success criterion remains unverified",
-    "Reported implementation surface is materially inconsistent with the requested scope"
+    "Reported implementation surface is materially inconsistent with the requested scope",
+    "Primary repository inspection was impossible in this review session",
+    "Required quality gates were not independently proven",
+    "Streaming wire-format success criteria remain unverified at review time"
   ]
 }

@@ -1,7 +1,7 @@
 {
   "workerId": "claude",
-  "sampleCount": 3,
-  "successRate": 0.3333,
+  "sampleCount": 5,
+  "successRate": 0.4,
   "commonFailureClasses": [
     "Check failed: [object Object]",
     "Check failed: cd /home/drew/code/vllm-inference-blueprint && cargo test --workspace",
@@ -12,6 +12,8 @@
     "Independent code inspection was impossible, so there is no trustworthy basis for approval",
     "Mandatory verification gates are not evidenced as passing",
     "Every major success criterion remains unverified",
-    "Reported implementation surface is materially inconsistent with the requested scope"
+    "Reported implementation surface is materially inconsistent with the requested scope",
+    "Primary repository inspection was impossible in this review session",
+    "Required quality gates were not independently proven"
   ]
 }

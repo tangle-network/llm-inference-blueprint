@@ -1,0 +1,68 @@
+{
+  "iteration": 2,
+  "workerExitCode": 0,
+  "checks": [
+    {
+      "cmd": "cd /home/drew/code/vllm-inference-blueprint && cargo fmt --all -- --check",
+      "pass": true
+    },
+    {
+      "cmd": "cd /home/drew/code/vllm-inference-blueprint && cargo clippy --workspace -- -D warnings",
+      "pass": true
+    },
+    {
+      "cmd": "cd /home/drew/code/vllm-inference-blueprint && cargo test --workspace",
+      "pass": true
+    }
+  ],
+  "judges": [
+    {
+      "name": "billing_security",
+      "score": 7,
+      "findings": [
+        "CRITICAL: claimPayment always settles the FULL pre-authorized amount, not actual token cost. The contract interface `claimPayment(bytes32, address)` has no amount parameter — the `actual_amount` passed to BillingClient::claim_payment() is only used for logging. Users are systematically overcharged whenever actual usage < pre-auth amount. The code documents this limitation but does not mitigate it (e.g., by adjusting the pre-auth amount to match estimated cost).",
+        "MEDIUM: max_gas_price_gwei config field exists but is NEVER checked before sending transactions. Both authorize_spend() and claim_payment() submit on-chain txs without comparing current gas price to the cap. An operator could burn excessive gas during network congestion with no protection.",
+        "MEDIUM: used_nonces HashSet grows unboundedly in memory — no eviction/TTL. A long-running operator will accumulate nonces forever. Should evict entries after SpendAuth expiry + tolerance.",
+        "MEDIUM: When vLLM request fails AFTER authorize_spend succeeds (lines 463-479), pre-auth funds are locked until SpendAuth expiry with no refund mechanism. The code documents this but the operator still bears the cost of the authorize_spend gas with zero revenue.",
+        "LOW: The 3x estimated_max_cost warning (line 425) only logs a warning but still proceeds. A malicious or buggy client can pre-auth an arbitrarily large amount (up to max_spend_per_request) and the contract will settle that full amount regardless of actual usage.",
+        "LOW: settle_billing silently returns on amount parse failure (line 214) — operator serves inference for free if the amount string somehow becomes invalid between validation and settlement. Should be impossible given earlier validation but the silent return is dangerous.",
+        "GOOD: Signature verification against on-chain spending key is correctly implemented (step 3g). Prior audit finding about _recovered being discarded is fixed.",
+        "GOOD: Nonce replay protection, operator address validation, min_charge_amount, max_spend_per_request, min_credit_balance, and expiry checks are all properly implemented.",
+        "GOOD: claim_payment has exponential backoff retry with configurable max_retries and detailed error logging on final failure."
+      ]
+    },
+    {
+      "name": "reliability",
+      "score": 7,
+      "findings": [
+        "MEDIUM: No crash recovery for vLLM during active requests. The watchdog respawns vLLM on health check failure (lib.rs:249-282), but the HTTP server's AppState holds Arc<VllmProcess> pointing to the OLD process. After respawn, the new VllmProcess is stored in _live_handle but never replaces state.vllm — all HTTP requests continue hitting the dead process via the original Arc. The proxy works by host:port coincidence only if the new process binds the same port, which it will, but the old VllmProcess's reqwest::Client and the new one are separate. Actually, re-reading: the HTTP server proxies via host:port strings, not the VllmProcess handle directly — so requests DO reach the new process. This is correct but fragile/non-obvious.",
+        "MEDIUM: Unbounded nonce set growth (server.rs:39, used_nonces). The HashSet<NonceKey> grows monotonically — every request with spend_auth inserts a (commitment, nonce) pair that is never evicted. Under sustained traffic this is a memory leak. Needs periodic pruning based on expiry timestamps.",
+        "LOW: Two .expect() calls in production paths (server.rs:670, 715) — Response::builder().body() and metrics response. These are safe in practice (valid status + headers won't fail) but violate the 'no .expect() in production' requirement from the audit criteria. Could use unwrap_or_else with a fallback 500 response.",
+        "LOW: Watchdog respawn loop has no max attempts (lib.rs:257-281). If vLLM binary is missing or GPU is dead, the loop retries forever with exponential backoff capped at 120s. Should have a max retry count before entering a degraded/shutdown state rather than burning CPU cycles indefinitely.",
+        "LOW: The streaming idle timeout (server.rs:534-548) wraps chunks through an mpsc channel, adding latency and allocation overhead per chunk. The spawned forwarding task (server.rs:537-544) silently dies if byte_stream errors — the ReceiverStream just ends without propagating the error cause to the timeout wrapper.",
+        "MINOR: vLLM stdout/stderr drain tasks (vllm.rs:74-90) silently stop on any IO error (Ok(Some(line)) pattern drops Err variants). If the pipe errors, the task exits without logging. Not a deadlock risk since the pipe is consumed, but diagnostic logs are lost.",
+        "MINOR: settle_billing is fire-and-forget for streaming (server.rs:624-662) — if claim_payment fails after all retries, the error is logged but the operator has no alerting/recovery mechanism beyond log scraping. For non-streaming, same issue (server.rs:488-496)."
+      ]
+    },
+    {
+      "name": "code_quality",
+      "score": 7,
+      "findings": [
+        "MEMORY LEAK: `used_nonces: Arc<RwLock<HashSet<NonceKey>>>` grows unboundedly — no eviction, TTL, or LRU cap. A long-running operator will OOM. Need expiry-based cleanup (e.g., evict nonces whose SpendAuth expiry has passed).",
+        "DEAD CONFIG: `BillingConfig::max_gas_price_gwei` is defined and deserialized but never read anywhere in the codebase. Dead code.",
+        "SECRET LEAK RISK: `VllmConfig` derives `Serialize` and contains `hf_token: Option<String>`. Unlike `operator_key` which gets custom Debug redaction, `hf_token` would leak if the config is ever serialized (logging, debug endpoints, error messages).",
+        "PERMISSIVE CORS: `CorsLayer::permissive()` in production allows any origin. For a paid API with signature-based auth this is low-risk, but a production service should restrict origins or at minimum document this as intentional.",
+        "MISLEADING TEST: `test_max_spend_per_request_rejection` claims to test max_spend enforcement but the request is rejected at step 3d (operator address mismatch) before max_spend is ever checked. The assertion `resp.status() == 400 || resp.status() == 402` passes for the wrong reason. The inline arithmetic check doesn't exercise the handler code path.",
+        "INLINE BSM INTERFACE: InferenceBSM.sol defines the full IBlueprintServiceManager interface inline (~80 lines) instead of importing BlueprintServiceManagerBase from tnt-core. The comment says 'for now' but this violates requirement #7 and will drift from the canonical interface.",
+        "NO CUSTOM ERROR TYPE: All operator errors are boxed into `RunnerError::Other(String)` or `anyhow::Error`. No domain error enum means callers can't match on specific failure modes programmatically. Idiomatic Rust would define `InferenceError` with variants.",
+        "SSE LINE_BUF CLEAR ON OVERFLOW: server.rs:561-568 clears the entire line_buf when it exceeds max_line_buf_bytes. This drops any valid partial line data, potentially losing the usage chunk and causing the fallback to max_tokens billing (overcharging the user). Should drain complete lines first, then check size.",
+        "STREAMING USAGE FALLBACK OVERCHARGES: When the usage oneshot is never sent (stream error/timeout), the fallback charges `(0, max_tokens)` — i.e., zero prompt tokens and max_tokens completion tokens. This could significantly overcharge since completion tokens are typically priced higher. The actual tokens served could be much less.",
+        "NONCE REPLAY PROTECTION IS NODE-LOCAL: `used_nonces` is an in-memory HashSet. In a multi-replica deployment, the same nonce could be replayed against different replicas. Would need shared state (Redis, on-chain check) for production multi-node.",
+        "WATCHDOG RESPAWN LOOP HAS NO GIVE-UP: lib.rs:257-281 retries vLLM respawn indefinitely with exponential backoff capped at 120s. If the GPU dies or vLLM binary is corrupt, this loops forever. Should have a max retry count after which it reports fatal and exits.",
+        "TESTS ARE GOOD BUT INCOMPLETE: 20+ meaningful tests covering metrics, semaphore, billing cost calc, SSE parsing, chunk boundaries, handler integration via wiremock, billing enforcement, config defaults, and key redaction. However: no test for EIP-712 signature recovery with a real key, no test for the watchdog respawn path, no test for the line_buf overflow path, no test for idle chunk timeout."
+      ]
+    }
+  ],
+  "avgScore": 7,
+  "threshold": 8
+}

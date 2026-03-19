@@ -18,16 +18,15 @@ pub struct VllmProcess {
 impl VllmProcess {
     /// Connect to an already-running vLLM instance without spawning a subprocess.
     /// Useful for testing or when vLLM is managed externally.
-    pub fn connect(config: Arc<OperatorConfig>) -> Self {
+    pub fn connect(config: Arc<OperatorConfig>) -> anyhow::Result<Self> {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(300))
-            .build()
-            .expect("failed to build HTTP client");
-        Self {
+            .build()?;
+        Ok(Self {
             child: Mutex::new(None),
             config,
             client,
-        }
+        })
     }
 
     /// Spawn the vLLM OpenAI-compatible server as a subprocess.
