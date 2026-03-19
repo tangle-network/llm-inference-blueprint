@@ -1,0 +1,44 @@
+{
+  "auditId": "post-cycle3-production-readiness",
+  "date": "2026-03-19",
+  "traceId": "2e9ffce5-d5f8-4821-b74b-34cf02e3fc47",
+  "foremanResult": {
+    "status": "pass",
+    "recommendation": "complete",
+    "scores": { "deterministic": 1, "quality": 1, "correctness": 1 },
+    "findings": 0,
+    "rounds": 1,
+    "durationSec": 72
+  },
+  "independentAudit": {
+    "overallRating": 4,
+    "estimatedWeeksToProduction": "4-6",
+    "areas": {
+      "streaming_sse": { "rating": 5, "blocker": false, "gaps": ["chunk boundary splits lose billing data", "no streaming settlement timeout", "client disconnect invisible", "no SSE retry/id fields"] },
+      "billing_payment": { "rating": 3, "blocker": true, "gaps": ["charge_amount computed but ignored — always claims full pre-auth", "signature not checked against credit account spending key", "gas cost unbounded (2 txs per request)", "billing claim failure silently swallowed", "max_spend_per_request and min_credit_balance config never read"] },
+      "concurrency": { "rating": 6, "blocker": false, "gaps": ["no per-account rate limiting", "no request timeout", "no request body size limit"] },
+      "vllm_subprocess": { "rating": 4, "blocker": true, "gaps": ["stdout/stderr pipe deadlock (won't start under load)", "no crash recovery", "lib.rs .expect() panics on vLLM error", "no process group management"] },
+      "metrics": { "rating": 5, "blocker": false, "gaps": ["no billing metrics", "no GPU metrics", "no error categorization in labels"] },
+      "config_deploy": { "rating": 5, "blocker": false, "gaps": ["private key in plaintext", "no TLS", "permissive CORS"] },
+      "contract_security": { "rating": 6, "blocker": true, "gaps": ["onBlueprintCreated frontrunnable", "no slashing", "no maxTokens validation against model config", "receive() accepts ETH with no accounting"] },
+      "sdk": { "rating": 4, "blocker": false, "gaps": ["no streaming", "no on-chain queries", "nonce resets on restart", "Number() precision loss for large values"] },
+      "tests": { "rating": 5, "blocker": false, "gaps": ["no billing integration tests", "no error path handler tests", "no chunk boundary tests", "no vLLM crash tests"] }
+    },
+    "criticalBlockers": [
+      "billing: charge_amount ignored, claims full pre-auth always",
+      "billing: signature not verified against credit account",
+      "vllm: pipe deadlock — stdout/stderr not drained",
+      "vllm: lib.rs .expect() panics on error, kills operator",
+      "contract: onBlueprintCreated has no access control",
+      "streaming: chunk boundary splits silently skip billing"
+    ],
+    "verdict": "Foreman rated this 10/10. Independent audit rates it 4/10. The gap is: deterministic checks verify syntax and compilation, not economic security or production reliability. The billing flow — the entire economic model — has multiple bugs that would result in operators giving away free inference or users being overcharged."
+  },
+  "learnings": [
+    "cargo test + clippy passing does NOT mean production-ready",
+    "billing/payment flows need dedicated security-focused tests",
+    "LLM reviewer rubber-stamps when deterministic checks pass",
+    "the 'quality 10/10' score from the reviewer was wrong",
+    "need domain-specific audit (billing, crypto, subprocess) not just code quality"
+  ]
+}
