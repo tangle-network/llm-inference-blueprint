@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    name: Rust (${{ matrix.check }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - check: fmt
+            command: cargo fmt --all -- --check
+          - check: clippy
+            command: cargo clippy --workspace -- -D warnings
+          - check: test
+            command: cargo test --workspace
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: ${{ matrix.check }}
+        run: ${{ matrix.command }}
+
+  contracts:
+    name: Solidity
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: contracts
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: foundry-rs/foundry-toolchain@v1
+
+      - name: Install dependencies
+        run: forge soldeer update
+
+      - name: Build
+        run: forge build
+
+      - name: Test
+        run: forge test
