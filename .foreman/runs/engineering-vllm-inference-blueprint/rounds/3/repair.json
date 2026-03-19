@@ -1,0 +1,7 @@
+{
+  "summary": "Repair the issues identified during validation.",
+  "actions": [
+    "Resolve low finding: max_spend_per_request and min_credit_balance config fields are defined but never enforced",
+    "Resolve low finding: get_capabilities() is public dead code"
+  ]
+}

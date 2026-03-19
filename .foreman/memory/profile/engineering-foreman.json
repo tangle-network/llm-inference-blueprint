@@ -1,0 +1,17 @@
+{
+  "profileId": "engineering-foreman",
+  "workerPreferences": [
+    "claude",
+    "codex"
+  ],
+  "evaluationStyle": [
+    "deterministic-first",
+    "judge-after-grounded-checks"
+  ],
+  "memoryScopes": [
+    "profile",
+    "project",
+    "environment"
+  ],
+  "workflowImprovements": []
+}

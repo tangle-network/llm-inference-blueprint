@@ -1,12 +1,12 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 
 use crate::config::OperatorConfig;
 use crate::server::{ChatCompletionRequest, ChatCompletionResponse};
-
 
 /// Manages a vLLM subprocess.
 pub struct VllmProcess {
@@ -53,14 +53,18 @@ impl VllmProcess {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
 
-        let child = cmd.spawn()?;
+        let mut child = cmd.spawn()?;
         tracing::info!(pid = child.id(), url = %vllm_url, "spawned vLLM process");
 
-        // Spawn a task to drain stderr and log it
-        let stderr = child.stderr.as_ref().map(|_| ());
-        if stderr.is_some() {
-            // In a real implementation, we'd tokio::io::BufReader the stderr
-            // and log each line. Keeping it simple for now.
+        // Drain stderr line-by-line and forward to tracing
+        if let Some(stderr) = child.stderr.take() {
+            tokio::spawn(async move {
+                let reader = BufReader::new(stderr);
+                let mut lines = reader.lines();
+                while let Ok(Some(line)) = lines.next_line().await {
+                    tracing::info!(target: "vllm", "{}", line);
+                }
+            });
         }
 
         let client = reqwest::Client::builder()
@@ -133,7 +137,7 @@ impl VllmProcess {
     }
 
     /// Proxy a chat completion request to vLLM.
-    pub async fn chat_completion(
+    pub(crate) async fn chat_completion(
         &self,
         req: &ChatCompletionRequest,
     ) -> anyhow::Result<ChatCompletionResponse> {

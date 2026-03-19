@@ -1,0 +1,11 @@
+{
+  "taskShape": "engineering",
+  "successfulPatterns": [],
+  "badPatterns": [
+    "missing or failing validation gates"
+  ],
+  "repairRecipes": [
+    "repair CorsLayer::permissive() in production HTTP server",
+    "repair VLLM_MODEL_NAME fallback inconsistent with VLLM_BASE_URL/VLLM_CLIENT error handling"
+  ]
+}
