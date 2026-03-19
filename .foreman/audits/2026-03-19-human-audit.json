@@ -1,0 +1,29 @@
+{
+  "auditId": "human-audit-drew-2026-03-19",
+  "source": "human-operator",
+  "date": "2026-03-19",
+  "critical": [
+    {
+      "id": "dead-job-path",
+      "title": "main.rs missing TangleProducer/TangleConsumer — on-chain job path is dead code",
+      "detail": "The runner never polls for JobSubmitted events, never submits results. run_inference in lib.rs will never fire.",
+      "severity": "critical"
+    },
+    {
+      "id": "auth-bypass",
+      "title": "billing.rs verify_spend_auth_signature recovers signer but discards it (_recovered)",
+      "detail": "Any valid ECDSA signature passes. Auth bypass — anyone can forge SpendAuth for any credit account.",
+      "severity": "critical"
+    }
+  ],
+  "medium": [
+    { "id": "readiness-broken", "title": "BackgroundService::start() never sends Ok(()) — readiness signal broken" },
+    { "id": "inline-interface", "title": "BSM implements inline interface copy instead of extending BlueprintServiceManagerBase from tnt-core" },
+    { "id": "no-tenancy", "title": "No service ID scoping in HTTP layer — no tenancy boundaries" },
+    { "id": "hardcoded-url", "title": "run_inference hardcodes vLLM URL instead of using config" },
+    { "id": "plaintext-key", "title": "Private key stored as raw hex in config — no keystore integration" },
+    { "id": "temp-mismatch", "title": "Temperature type mismatch: BSM uses uint32, sol! type uses uint64" }
+  ],
+  "verdict": "Foreman's judges did not catch either critical issue. The auth bypass (discarded _recovered key) is a 1-line bug that any security-focused reviewer should find. The dead job path (no TangleProducer/Consumer) means the entire on-chain integration doesn't work. These are the gaps in Foreman's judge prompts.",
+  "foreman_gap": "The judge prompts ask generic questions ('is billing secure?', 'are there panics?') instead of checking specific patterns. They need to: (1) grep for _recovered or unused variables in crypto paths, (2) verify the BlueprintRunner actually subscribes to on-chain events, (3) check that BackgroundService resolves its readiness future."
+}
