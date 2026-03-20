@@ -18,6 +18,10 @@ pub struct OperatorConfig {
 
     /// GPU configuration
     pub gpu: GpuConfig,
+
+    /// RLN Mode configuration (optional — enables RLN payment path)
+    #[serde(default)]
+    pub rln: Option<RLNConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -127,6 +131,31 @@ pub struct GpuConfig {
     pub monitor_interval_secs: u64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RLNConfig {
+    /// RLNSettlement contract address
+    pub settlement_address: String,
+
+    /// Path to the snarkjs verification key JSON (optional — MVP skips real verification)
+    pub verification_key_path: Option<String>,
+
+    /// How often to batch-settle pending RLN claims (seconds)
+    #[serde(default = "default_batch_settle_interval")]
+    pub batch_settle_interval_secs: u64,
+
+    /// Maximum claims per batch transaction
+    #[serde(default = "default_max_batch_size")]
+    pub max_batch_size: usize,
+}
+
+fn default_batch_settle_interval() -> u64 {
+    60
+}
+
+fn default_max_batch_size() -> usize {
+    64
+}
+
 fn default_vllm_command() -> String {
     "python3 -m vllm.entrypoints.openai.api_server".to_string()
 }
@@ -227,6 +256,59 @@ mod tests {
         assert_eq!(cfg.billing.price_per_output_token, 2);
         assert_eq!(cfg.gpu.expected_gpu_count, 1);
         assert!(cfg.tangle.service_id.is_none());
+    }
+
+    #[test]
+    fn test_rln_config_optional() {
+        let cfg: OperatorConfig = serde_json::from_str(example_config_json()).unwrap();
+        assert!(cfg.rln.is_none(), "RLN config should be None by default");
+    }
+
+    #[test]
+    fn test_rln_config_present() {
+        let json = r#"{
+            "tangle": {
+                "rpc_url": "http://localhost:8545",
+                "chain_id": 31337,
+                "operator_key": "0xdeadbeef",
+                "tangle_core": "0x0000000000000000000000000000000000000001",
+                "shielded_credits": "0x0000000000000000000000000000000000000002",
+                "blueprint_id": 1,
+                "service_id": null
+            },
+            "vllm": {
+                "model": "test",
+                "max_model_len": 4096,
+                "host": "127.0.0.1",
+                "port": 8000,
+                "tensor_parallel_size": 1
+            },
+            "server": {},
+            "billing": {
+                "price_per_input_token": 1,
+                "price_per_output_token": 2,
+                "max_spend_per_request": 1000000,
+                "min_credit_balance": 1000
+            },
+            "gpu": {
+                "expected_gpu_count": 1,
+                "min_vram_mib": 16000
+            },
+            "rln": {
+                "settlement_address": "0x0000000000000000000000000000000000000003",
+                "batch_settle_interval_secs": 120,
+                "max_batch_size": 32
+            }
+        }"#;
+        let cfg: OperatorConfig = serde_json::from_str(json).unwrap();
+        let rln = cfg.rln.unwrap();
+        assert_eq!(
+            rln.settlement_address,
+            "0x0000000000000000000000000000000000000003"
+        );
+        assert_eq!(rln.batch_settle_interval_secs, 120);
+        assert_eq!(rln.max_batch_size, 32);
+        assert!(rln.verification_key_path.is_none());
     }
 
     #[test]

@@ -1,3 +1,4 @@
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use alloy::{
@@ -8,6 +9,7 @@ use alloy::{
     sol,
     sol_types::SolValue,
 };
+use tokio::sync::Mutex;
 
 use crate::config::OperatorConfig;
 use crate::server::SpendAuthPayload;
@@ -41,11 +43,88 @@ sol! {
     }
 }
 
+// Generate bindings for the RLNSettlement contract.
+sol! {
+    #[sol(rpc)]
+    interface IRLNSettlement {
+        function batchClaim(
+            address token,
+            bytes32[] calldata nullifiers,
+            uint256[] calldata amounts,
+            address operator
+        ) external;
+        function usedNullifiers(bytes32) external view returns (bool);
+    }
+}
+
+// ─── RLN types ──────────────────────────────────────────────────────────
+
+/// An RLN payment proof submitted by the client.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct RLNProof {
+    /// Groth16 proof bytes (snarkjs format)
+    pub proof: Vec<u8>,
+    /// Public signals from the circuit
+    pub public_signals: Vec<String>,
+    /// Nullifier hash (unique per epoch+identity)
+    pub nullifier: [u8; 32],
+    /// Shamir share x-coordinate
+    pub share_x: [u8; 32],
+    /// Shamir share y-coordinate
+    pub share_y: [u8; 32],
+    /// Epoch identifier
+    pub epoch: u64,
+    /// Claimed cost for this request
+    pub amount: u64,
+}
+
+/// Result of verifying an RLN proof.
+#[derive(Debug)]
+pub struct RLNVerificationResult {
+    pub nullifier: [u8; 32],
+    pub amount: u64,
+    pub is_fresh: bool,
+}
+
+/// Stored Shamir share for double-signal detection.
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+struct ShamirShare {
+    x: [u8; 32],
+    y: [u8; 32],
+}
+
+/// Pending claim awaiting batch settlement.
+#[derive(Debug, Clone)]
+struct PendingClaim {
+    nullifier: [u8; 32],
+    amount: u64,
+}
+
+/// RLN verifier state (nullifier set, shares, pending claims).
+pub(crate) struct RLNState {
+    used_nullifiers: HashSet<[u8; 32]>,
+    shares: HashMap<[u8; 32], ShamirShare>,
+    pending_claims: Vec<PendingClaim>,
+}
+
+impl RLNState {
+    fn new() -> Self {
+        Self {
+            used_nullifiers: HashSet::new(),
+            shares: HashMap::new(),
+            pending_claims: Vec::new(),
+        }
+    }
+}
+
 /// Handles ShieldedCredits billing operations.
 pub struct BillingClient {
     config: Arc<OperatorConfig>,
     wallet: EthereumWallet,
     shielded_credits: Address,
+    rln_state: Mutex<RLNState>,
+    rln_settlement: Option<Address>,
 }
 
 impl BillingClient {
@@ -54,10 +133,18 @@ impl BillingClient {
         let wallet = EthereumWallet::from(signer);
         let shielded_credits: Address = config.tangle.shielded_credits.parse()?;
 
+        let rln_settlement = config
+            .rln
+            .as_ref()
+            .map(|rln| rln.settlement_address.parse::<Address>())
+            .transpose()?;
+
         Ok(Self {
             config,
             wallet,
             shielded_credits,
+            rln_state: Mutex::new(RLNState::new()),
+            rln_settlement,
         })
     }
 
@@ -168,6 +255,132 @@ impl BillingClient {
         );
 
         Ok(())
+    }
+
+    // ─── RLN Mode ───────────────────────────────────────────────────────
+
+    /// Verify an RLN proof (MVP: structural validation + nullifier freshness).
+    ///
+    /// Real Groth16 verification requires ark-bn254/ark-groth16 or shelling out
+    /// to snarkjs. This MVP checks proof structure and nullifier uniqueness.
+    pub async fn verify_rln_proof(&self, proof: &RLNProof) -> anyhow::Result<RLNVerificationResult> {
+        // Structural checks
+        if proof.public_signals.is_empty() {
+            anyhow::bail!("RLN proof has no public signals");
+        }
+        if proof.amount == 0 {
+            anyhow::bail!("RLN proof amount is zero");
+        }
+
+        // Check nullifier freshness (in-memory)
+        let state = self.rln_state.lock().await;
+        let is_fresh = !state.used_nullifiers.contains(&proof.nullifier);
+
+        // If configured, check on-chain nullifier status
+        if is_fresh {
+            if let Some(settlement_addr) = self.rln_settlement {
+                let provider = ProviderBuilder::new()
+                    .wallet(self.wallet.clone())
+                    .connect_http(self.config.tangle.rpc_url.parse()?);
+                let contract = IRLNSettlement::new(settlement_addr, &provider);
+                let on_chain_used = contract
+                    .usedNullifiers(FixedBytes(proof.nullifier))
+                    .call()
+                    .await?;
+                if on_chain_used {
+                    return Ok(RLNVerificationResult {
+                        nullifier: proof.nullifier,
+                        amount: proof.amount,
+                        is_fresh: false,
+                    });
+                }
+            }
+        }
+
+        Ok(RLNVerificationResult {
+            nullifier: proof.nullifier,
+            amount: proof.amount,
+            is_fresh,
+        })
+    }
+
+    /// Record an RLN claim after successful verification.
+    /// Also stores the Shamir share for double-signal detection.
+    pub async fn record_rln_claim(&self, proof: &RLNProof) {
+        let mut state = self.rln_state.lock().await;
+        state.used_nullifiers.insert(proof.nullifier);
+        state.shares.insert(
+            proof.nullifier,
+            ShamirShare {
+                x: proof.share_x,
+                y: proof.share_y,
+            },
+        );
+        state.pending_claims.push(PendingClaim {
+            nullifier: proof.nullifier,
+            amount: proof.amount,
+        });
+    }
+
+    /// Batch-settle all pending RLN claims on-chain via RLNSettlement.batchClaim.
+    /// Returns the transaction hash on success.
+    pub async fn batch_settle_rln(&self) -> anyhow::Result<String> {
+        let settlement_addr = self
+            .rln_settlement
+            .ok_or_else(|| anyhow::anyhow!("RLN settlement not configured"))?;
+
+        let claims: Vec<PendingClaim> = {
+            let mut state = self.rln_state.lock().await;
+            let max_batch = self
+                .config
+                .rln
+                .as_ref()
+                .map(|r| r.max_batch_size)
+                .unwrap_or(64);
+            let drain_count = state.pending_claims.len().min(max_batch);
+            state.pending_claims.drain(..drain_count).collect()
+        };
+
+        if claims.is_empty() {
+            return Ok(String::new());
+        }
+
+        let nullifiers: Vec<FixedBytes<32>> = claims
+            .iter()
+            .map(|c| FixedBytes(c.nullifier))
+            .collect();
+        let amounts: Vec<U256> = claims.iter().map(|c| U256::from(c.amount)).collect();
+
+        let provider = ProviderBuilder::new()
+            .wallet(self.wallet.clone())
+            .connect_http(self.config.tangle.rpc_url.parse()?);
+
+        let contract = IRLNSettlement::new(settlement_addr, &provider);
+
+        // Use the shielded_credits token as the payment token
+        let token: Address = self.shielded_credits; // TODO: separate RLN token config
+
+        let signer: PrivateKeySigner = self.config.tangle.operator_key.parse()?;
+        let operator_addr = signer.address();
+
+        let pending = contract
+            .batchClaim(token, nullifiers, amounts, operator_addr)
+            .send()
+            .await?;
+        let receipt = pending.get_receipt().await?;
+
+        tracing::info!(
+            tx_hash = %receipt.transaction_hash,
+            claim_count = claims.len(),
+            "RLN batch settlement confirmed"
+        );
+
+        Ok(format!("{}", receipt.transaction_hash))
+    }
+
+    /// Get the number of pending RLN claims.
+    pub async fn pending_rln_count(&self) -> usize {
+        self.rln_state.lock().await.pending_claims.len()
     }
 }
 

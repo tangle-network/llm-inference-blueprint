@@ -14,10 +14,11 @@ use tower_http::trace::TraceLayer;
 
 use alloy::primitives::Address;
 
-use crate::billing::{self, BillingClient};
+use crate::billing::{self, BillingClient, RLNProof};
 use crate::config::OperatorConfig;
 use crate::health;
 use crate::vllm::VllmProcess;
+
 
 /// Shared application state for the HTTP server.
 #[derive(Clone)]
@@ -34,6 +35,8 @@ pub(crate) async fn start(state: AppState) -> anyhow::Result<JoinHandle<()>> {
     let app = HttpRouter::new()
         .route("/v1/chat/completions", post(chat_completions))
         .route("/v1/models", get(list_models))
+        .route("/v1/payment_methods", get(payment_methods))
+        .route("/v1/relay", post(relay_transaction))
         .route("/health", get(health_check))
         .route("/health/gpu", get(gpu_health))
         .layer(CorsLayer::permissive())
@@ -74,8 +77,11 @@ pub(crate) struct ChatCompletionRequest {
     #[serde(default)]
     pub stop: Option<Vec<String>>,
 
-    /// ShieldedCredits spend authorization (required for billing)
+    /// ShieldedCredits spend authorization (Credit Mode billing)
     pub spend_auth: Option<SpendAuthPayload>,
+
+    /// RLN Mode payment proof (alternative to spend_auth)
+    pub rln_proof: Option<RLNProof>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -145,6 +151,40 @@ struct ErrorDetail {
     code: String,
 }
 
+// ─── Relay types ──────────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+pub(crate) struct RelayRequest {
+    /// "credits" or "rln" — which gateway function to call
+    pub mode: String,
+    /// Hex-encoded proof data for the shielded withdrawal
+    pub proof_data: String,
+    /// Public inputs for the withdrawal proof
+    pub public_inputs: Vec<String>,
+    /// Target contract address (ShieldedGateway)
+    pub gateway_address: String,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct RelayResponse {
+    pub tx_hash: String,
+    pub status: String,
+}
+
+// ─── Payment methods ──────────────────────────────────────────────────────
+
+#[derive(Debug, Serialize)]
+struct PaymentMethod {
+    r#type: String,
+    description: String,
+}
+
+#[derive(Debug, Serialize)]
+struct PaymentMethodsResponse {
+    payment_methods: Vec<PaymentMethod>,
+}
+
 fn default_max_tokens() -> u32 {
     512
 }
@@ -186,18 +226,48 @@ async fn chat_completions(
         ));
     }
 
-    // 1. Require and verify SpendAuth when billing is enabled
-    if state.config.billing.required && req.spend_auth.is_none() {
+    // 1. Require payment when billing is enabled (either SpendAuth or RLN proof)
+    if state.config.billing.required && req.spend_auth.is_none() && req.rln_proof.is_none() {
         return Err((
             StatusCode::PAYMENT_REQUIRED,
             Json(ErrorResponse {
                 error: ErrorDetail {
-                    message: "spend_auth is required".to_string(),
+                    message: "spend_auth or rln_proof is required".to_string(),
                     r#type: "billing_error".to_string(),
-                    code: "missing_spend_auth".to_string(),
+                    code: "missing_payment".to_string(),
                 },
             }),
         ));
+    }
+
+    // 1b. Verify RLN proof if provided
+    if let Some(ref rln_proof) = req.rln_proof {
+        let result = state.billing.verify_rln_proof(rln_proof).await.map_err(|e| {
+            tracing::warn!(error = %e, "RLN proof verification failed");
+            (
+                StatusCode::PAYMENT_REQUIRED,
+                Json(ErrorResponse {
+                    error: ErrorDetail {
+                        message: format!("RLN proof verification failed: {e}"),
+                        r#type: "billing_error".to_string(),
+                        code: "invalid_rln_proof".to_string(),
+                    },
+                }),
+            )
+        })?;
+
+        if !result.is_fresh {
+            return Err((
+                StatusCode::PAYMENT_REQUIRED,
+                Json(ErrorResponse {
+                    error: ErrorDetail {
+                        message: "RLN nullifier already used".to_string(),
+                        r#type: "billing_error".to_string(),
+                        code: "nullifier_used".to_string(),
+                    },
+                }),
+            ));
+        }
     }
 
     if let Some(ref spend_auth) = req.spend_auth {
@@ -338,8 +408,6 @@ async fn chat_completions(
                 .authorize_and_claim(&spend_auth, actual_cost)
                 .await
             {
-                // Log at error with full audit context — the operator served inference
-                // but failed to collect payment. This requires manual investigation.
                 tracing::error!(
                     error = %e,
                     commitment = %spend_auth.commitment,
@@ -350,6 +418,14 @@ async fn chat_completions(
                 );
             }
         }
+    } else if let Some(rln_proof) = req.rln_proof {
+        // RLN Mode: record the claim for batch settlement
+        state.billing.record_rln_claim(&rln_proof).await;
+        tracing::info!(
+            epoch = rln_proof.epoch,
+            amount = rln_proof.amount,
+            "RLN claim recorded for batch settlement"
+        );
     }
 
     Ok(Json(vllm_response))
@@ -381,6 +457,98 @@ async fn health_check(
     }
 }
 
+async fn payment_methods(State(state): State<AppState>) -> Json<PaymentMethodsResponse> {
+    let mut methods = vec![PaymentMethod {
+        r#type: "credit_mode".to_string(),
+        description: "EIP-712 SpendAuth".to_string(),
+    }];
+
+    if state.config.rln.is_some() {
+        methods.push(PaymentMethod {
+            r#type: "rln_mode".to_string(),
+            description: "RLN ZK proof".to_string(),
+        });
+    }
+
+    Json(PaymentMethodsResponse {
+        payment_methods: methods,
+    })
+}
+
+async fn relay_transaction(
+    State(_state): State<AppState>,
+    Json(payload): Json<RelayRequest>,
+) -> Result<Json<RelayResponse>, (StatusCode, Json<ErrorResponse>)> {
+    // Validate mode
+    if payload.mode != "credits" && payload.mode != "rln" {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    message: "mode must be 'credits' or 'rln'".to_string(),
+                    r#type: "invalid_request_error".to_string(),
+                    code: "invalid_relay_mode".to_string(),
+                },
+            }),
+        ));
+    }
+
+    // Validate gateway address
+    let _gateway: Address = payload.gateway_address.parse().map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    message: "invalid gateway_address".to_string(),
+                    r#type: "invalid_request_error".to_string(),
+                    code: "invalid_address".to_string(),
+                },
+            }),
+        )
+    })?;
+
+    // Validate proof data is valid hex
+    let _proof_bytes = hex::decode(
+        payload
+            .proof_data
+            .strip_prefix("0x")
+            .unwrap_or(&payload.proof_data),
+    )
+    .map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: ErrorDetail {
+                    message: "invalid proof_data hex".to_string(),
+                    r#type: "invalid_request_error".to_string(),
+                    code: "invalid_proof_data".to_string(),
+                },
+            }),
+        )
+    })?;
+
+    // In a full implementation, the operator would:
+    // 1. Decode the withdrawal proof
+    // 2. Submit gateway.shieldedFundCredits() or gateway.shieldedFundRLN()
+    // 3. Pay gas, take fee from the withdrawal amount
+    // 4. Return the tx hash
+    //
+    // For now, return a placeholder indicating the relay was accepted.
+    // The actual on-chain submission requires the ShieldedGateway ABI
+    // which lives in the tnt-core/shielded-payment-gateway repo.
+    tracing::info!(
+        mode = %payload.mode,
+        gateway = %payload.gateway_address,
+        "relay transaction received (submission not yet implemented)"
+    );
+
+    Ok(Json(RelayResponse {
+        tx_hash: "0x0000000000000000000000000000000000000000000000000000000000000000"
+            .to_string(),
+        status: "accepted".to_string(),
+    }))
+}
+
 async fn gpu_health() -> Result<Json<Vec<health::GpuInfo>>, (StatusCode, String)> {
     match health::detect_gpus().await {
         Ok(gpus) => Ok(Json(gpus)),
@@ -406,6 +574,7 @@ mod tests {
         assert!((req.temperature - 0.7).abs() < f32::EPSILON); // default
         assert!(!req.stream);
         assert!(req.spend_auth.is_none());
+        assert!(req.rln_proof.is_none());
     }
 
     #[test]
