@@ -12,7 +12,7 @@ use tokio::task::JoinHandle;
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 
-use alloy::primitives::Address;
+use alloy::primitives::{Address, Bytes, U256};
 
 use crate::billing::{self, BillingClient, RLNProof};
 use crate::config::OperatorConfig;
@@ -164,6 +164,12 @@ pub(crate) struct RelayRequest {
     pub public_inputs: Vec<String>,
     /// Target contract address (ShieldedGateway)
     pub gateway_address: String,
+    /// Credit commitment (bytes32, required for credits mode)
+    pub commitment: Option<String>,
+    /// Spending key address (required for credits mode)
+    pub spending_key: Option<String>,
+    /// Fee taken by the relayer from the withdrawal amount (in token base units)
+    pub fee: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -476,7 +482,7 @@ async fn payment_methods(State(state): State<AppState>) -> Json<PaymentMethodsRe
 }
 
 async fn relay_transaction(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     Json(payload): Json<RelayRequest>,
 ) -> Result<Json<RelayResponse>, (StatusCode, Json<ErrorResponse>)> {
     // Validate mode
@@ -494,7 +500,7 @@ async fn relay_transaction(
     }
 
     // Validate gateway address
-    let _gateway: Address = payload.gateway_address.parse().map_err(|_| {
+    let gateway: Address = payload.gateway_address.parse().map_err(|_| {
         (
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse {
@@ -508,7 +514,7 @@ async fn relay_transaction(
     })?;
 
     // Validate proof data is valid hex
-    let _proof_bytes = hex::decode(
+    let proof_bytes = hex::decode(
         payload
             .proof_data
             .strip_prefix("0x")
@@ -527,26 +533,108 @@ async fn relay_transaction(
         )
     })?;
 
-    // In a full implementation, the operator would:
-    // 1. Decode the withdrawal proof
-    // 2. Submit gateway.shieldedFundCredits() or gateway.shieldedFundRLN()
-    // 3. Pay gas, take fee from the withdrawal amount
-    // 4. Return the tx hash
-    //
-    // For now, return a placeholder indicating the relay was accepted.
-    // The actual on-chain submission requires the ShieldedGateway ABI
-    // which lives in the tnt-core/shielded-payment-gateway repo.
-    tracing::info!(
-        mode = %payload.mode,
-        gateway = %payload.gateway_address,
-        "relay transaction received (submission not yet implemented)"
-    );
+    // Credit Mode relay: shieldedFundCredits(proof, commitment, spendingKey)
+    if payload.mode == "credits" {
+        let commitment_str = payload.commitment.as_deref().ok_or_else(|| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: ErrorDetail {
+                        message: "commitment is required for credits mode".to_string(),
+                        r#type: "invalid_request_error".to_string(),
+                        code: "missing_commitment".to_string(),
+                    },
+                }),
+            )
+        })?;
 
-    Ok(Json(RelayResponse {
-        tx_hash: "0x0000000000000000000000000000000000000000000000000000000000000000"
-            .to_string(),
-        status: "accepted".to_string(),
-    }))
+        let spending_key_str = payload.spending_key.as_deref().ok_or_else(|| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: ErrorDetail {
+                        message: "spending_key is required for credits mode".to_string(),
+                        r#type: "invalid_request_error".to_string(),
+                        code: "missing_spending_key".to_string(),
+                    },
+                }),
+            )
+        })?;
+
+        let commitment: alloy::primitives::FixedBytes<32> =
+            commitment_str.parse().map_err(|_| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(ErrorResponse {
+                        error: ErrorDetail {
+                            message: "invalid commitment bytes32".to_string(),
+                            r#type: "invalid_request_error".to_string(),
+                            code: "invalid_commitment".to_string(),
+                        },
+                    }),
+                )
+            })?;
+
+        let spending_key: Address = spending_key_str.parse().map_err(|_| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: ErrorDetail {
+                        message: "invalid spending_key address".to_string(),
+                        r#type: "invalid_request_error".to_string(),
+                        code: "invalid_spending_key".to_string(),
+                    },
+                }),
+            )
+        })?;
+
+        let tx_hash = state
+            .billing
+            .relay_shielded_fund_credits(
+                gateway,
+                Bytes::from(proof_bytes),
+                commitment,
+                spending_key,
+            )
+            .await
+            .map_err(|e| {
+                tracing::error!(error = %e, "relay transaction submission failed");
+                (
+                    StatusCode::BAD_GATEWAY,
+                    Json(ErrorResponse {
+                        error: ErrorDetail {
+                            message: format!("relay submission failed: {e}"),
+                            r#type: "relay_error".to_string(),
+                            code: "relay_failed".to_string(),
+                        },
+                    }),
+                )
+            })?;
+
+        tracing::info!(
+            tx_hash = %tx_hash,
+            mode = "credits",
+            gateway = %gateway,
+            "relay transaction submitted"
+        );
+
+        return Ok(Json(RelayResponse {
+            tx_hash,
+            status: "submitted".to_string(),
+        }));
+    }
+
+    // RLN Mode relay: same pattern, different target function (not yet wired)
+    Err((
+        StatusCode::NOT_IMPLEMENTED,
+        Json(ErrorResponse {
+            error: ErrorDetail {
+                message: "RLN relay not yet implemented; use credits mode".to_string(),
+                r#type: "not_implemented".to_string(),
+                code: "rln_relay_pending".to_string(),
+            },
+        }),
+    ))
 }
 
 async fn gpu_health() -> Result<Json<Vec<health::GpuInfo>>, (StatusCode, String)> {

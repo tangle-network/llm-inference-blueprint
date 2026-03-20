@@ -43,6 +43,18 @@ sol! {
     }
 }
 
+// Generate bindings for the ShieldedGateway contract (relay target).
+sol! {
+    #[sol(rpc)]
+    interface IShieldedGateway {
+        function shieldedFundCredits(
+            bytes calldata proof,
+            bytes32 commitment,
+            address spendingKey
+        ) external payable;
+    }
+}
+
 // Generate bindings for the RLNSettlement contract.
 sol! {
     #[sol(rpc)]
@@ -381,6 +393,40 @@ impl BillingClient {
     /// Get the number of pending RLN claims.
     pub async fn pending_rln_count(&self) -> usize {
         self.rln_state.lock().await.pending_claims.len()
+    }
+
+    // ─── Relay ──────────────────────────────────────────────────────────
+
+    /// Submit a shieldedFundCredits transaction on behalf of a user.
+    ///
+    /// The operator pays gas and takes a fee from the withdrawal amount
+    /// (specified in the proof's extData.fee field, enforced by the contract).
+    pub async fn relay_shielded_fund_credits(
+        &self,
+        gateway: Address,
+        proof: alloy::primitives::Bytes,
+        commitment: FixedBytes<32>,
+        spending_key: Address,
+    ) -> anyhow::Result<String> {
+        let provider = ProviderBuilder::new()
+            .wallet(self.wallet.clone())
+            .connect_http(self.config.tangle.rpc_url.parse()?);
+
+        let contract = IShieldedGateway::new(gateway, &provider);
+
+        let pending = contract
+            .shieldedFundCredits(proof, commitment, spending_key)
+            .send()
+            .await?;
+        let receipt = pending.get_receipt().await?;
+
+        tracing::info!(
+            tx_hash = %receipt.transaction_hash,
+            gateway = %gateway,
+            "relayed shieldedFundCredits"
+        );
+
+        Ok(format!("{}", receipt.transaction_hash))
     }
 }
 
