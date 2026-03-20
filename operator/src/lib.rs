@@ -35,6 +35,16 @@ static VLLM_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 /// handler from sending requests before the subprocess is ready.
 static VLLM_READY: OnceLock<()> = OnceLock::new();
 
+/// Initialize the inference handler statics for testing. Call this before
+/// submitting jobs when running without the full InferenceServer background
+/// service (e.g. in BlueprintHarness tests with a mock vLLM endpoint).
+pub fn init_for_testing(base_url: &str, model: &str) {
+    let _ = VLLM_BASE_URL.set(base_url.to_string());
+    let _ = VLLM_MODEL_NAME.set(model.to_string());
+    let _ = VLLM_CLIENT.set(reqwest::Client::new());
+    let _ = VLLM_READY.set(());
+}
+
 // ─── ABI types for on-chain job encoding ─────────────────────────────────
 
 sol! {
