@@ -1,32 +1,28 @@
 {
   "task": {
     "id": "engineering-vllm-inference-blueprint",
-    "goal": "Implement the fixes in a production-safe way across the existing Rust workspace. In `server.rs` `handle_non_streaming`, compute the final claim from actual metered usage and configured pricing, and use that value in `claim_payment` instead of the full pre-authorized `spend_auth.amount`; also enforce both `max_spend_per_request` and `min_credit_balance` from configuration on the request path so requests that exceed policy fail cleanly before billing/processing proceeds. In `vllm.rs`, keep the current child-process model but eliminate the stdout/stderr backpressure hazard by actively draining both pipes asynchronously with Tokio readers and forwarding output into tracing so the service cannot hang when vLLM writes enough logs to fill the OS pipe buffer. In `lib.rs`, remove `.expect()` usage from on-chain job-handling error paths and convert those branches to proper `Result`-returning behavior so dependency failures such as vLLM downtime surface as handled job errors rather than crashing the operator. The finished change should preserve existing behavior where correct, add or update tests around the billing and error-handling regressions where the repository already has adjacent tests, and leave the workspace clean under formatting, clippy, and test gates.",
+    "goal": "Harden the vLLM inference blueprint operator for production readiness. This is a Tangle Blueprint that serves LLM inference via vLLM with ShieldedCredits anonymous billing. Fix every compiler warning, fix the hardcoded vLLM endpoint in lib.rs (should read from config), implement proper vLLM stderr log draining in vllm.rs, add request concurrency limiting in server.rs (max_concurrent_requests from config is defined but not enforced), fix all pub visibility mismatches, remove dead code. Add a GitHub Actions CI workflow that runs cargo fmt --check, cargo clippy, cargo test, and forge test. Add comprehensive Rust unit tests for config parsing, health/GPU detection (with mock nvidia-smi output), billing signature verification (with test vectors), and the HTTP server request validation. Every test must pass. Every warning must be resolved. Work inside /home/drew/code/vllm-inference-blueprint. Complete the full scope to production quality. Treat review, formatting, linting, and validation as part of completion.",
     "successCriteria": [
-      "In `server.rs` `handle_non_streaming`, the amount passed to `claim_payment` is derived from actual token usage and configured price, not from the full pre-authorization value `spend_auth.amount`.",
-      "The billing path still respects pre-authorization semantics: pre-auth may cap maximum liability, but final settlement/claim only charges the actual metered cost.",
-      "`max_spend_per_request` is enforced from configuration on the non-streaming request path, with a normal handled error when a request would exceed the configured limit.",
-      "`min_credit_balance` is enforced from configuration on the request path, with a normal handled error when the caller balance is below the configured minimum.",
-      "If actual usage is lower than the pre-authorized amount, the claimed amount is lower accordingly; there is no code path in the fixed handler that unconditionally claims the entire pre-authorized amount for non-streaming requests.",
-      "In `vllm.rs`, both child `stdout` and `stderr` are actively drained for the lifetime of the subprocess using Tokio async I/O primitives such as `tokio::io::BufReader` and line or chunk consumption.",
-      "The vLLM process spawn path no longer leaves piped `stdout` or `stderr` unread; there is no remaining TODO or equivalent behavior that can allow a full pipe buffer to block the child.",
-      "vLLM stdout is routed to tracing at an appropriate non-error level and stderr is routed to tracing at warning/error level, without blocking the main service flow.",
-      "In `lib.rs` job-handling paths, `.expect()` is removed anywhere an external/runtime failure can occur during on-chain job processing.",
-      "When vLLM or another downstream dependency fails during job handling, the operator returns/propagates a proper error result instead of panicking or terminating the process.",
-      "Formatting passes with no diffs after the change set.",
-      "`cargo clippy` passes with `-D warnings` for the workspace.",
-      "`cargo test --workspace` passes.",
-      "If tests are added or updated, they cover at least the billing settlement regression and one non-panicking job-handler failure path; tests must assert behavior, not only successful compilation."
+      "cargo check --workspace produces zero warnings",
+      "cargo clippy --workspace -- -D warnings produces zero errors",
+      "cargo fmt --check passes",
+      "cargo test --workspace passes with new tests covering config, health, billing, and server modules",
+      "A .github/workflows/ci.yml exists and would pass locally",
+      "The hardcoded vLLM endpoint http://127.0.0.1:8000 in lib.rs is replaced with config-driven endpoint",
+      "vllm.rs drains stderr via tokio BufReader instead of the TODO comment",
+      "server.rs enforces max_concurrent_requests from config using a semaphore or similar",
+      "work is grounded in actual repository state",
+      "completion is backed by executed checks or explicit blocker evidence"
     ],
     "environment": {
       "kind": "code",
       "target": "/home/drew/code/vllm-inference-blueprint"
     },
     "policy": {
-      "escalationMode": "auto-repair"
+      "escalationMode": "ask-human"
     },
     "metadata": {
-      "originalGoal": "Fix the 3 most critical production blockers found in the independent audit:\n\n1. BILLING BUG (CRITICAL): In server.rs handle_non_streaming, charge_amount is computed but IGNORED — claim_payment always claims the full pre-authorized spend_auth.amount. Fix: pass actual_cost (based on real token usage × price) to the claim, not the pre-auth amount. Also enforce max_spend_per_request and min_credit_balance from config.\n\n2. VLLM PIPE DEADLOCK (CRITICAL): vllm.rs spawns the subprocess with piped stdout/stderr but NEVER reads them. When the 64KB pipe buffer fills, vLLM blocks on write and hangs. Fix: drain both stdout and stderr via tokio BufReader into tracing::info/warn. This was noted in the code as a TODO.\n\n3. JOB HANDLER PANIC (CRITICAL): lib.rs uses .expect() on lines that can fail during on-chain job handling. If vLLM is down, this panics and kills the entire operator. Fix: return proper error results instead of panicking.\n\nRun cargo fmt, cargo clippy -D warnings, cargo test after fixes.",
+      "originalGoal": "Harden the vLLM inference blueprint operator for production readiness. This is a Tangle Blueprint that serves LLM inference via vLLM with ShieldedCredits anonymous billing. Fix every compiler warning, fix the hardcoded vLLM endpoint in lib.rs (should read from config), implement proper vLLM stderr log draining in vllm.rs, add request concurrency limiting in server.rs (max_concurrent_requests from config is defined but not enforced), fix all pub visibility mismatches, remove dead code. Add a GitHub Actions CI workflow that runs cargo fmt --check, cargo clippy, cargo test, and forge test. Add comprehensive Rust unit tests for config parsing, health/GPU detection (with mock nvidia-smi output), billing signature verification (with test vectors), and the HTTP server request validation. Every test must pass. Every warning must be resolved.",
       "profileId": "engineering-foreman",
       "selectedWorkerId": "claude",
       "reviewWorkerId": "codex",
@@ -39,14 +35,27 @@
       "promptPolicyMode": "explicit"
     }
   },
-  "status": "completed",
-  "finishedAt": "2026-03-19T03:01:28.257Z",
-  "rounds": 2,
+  "status": "max_rounds",
+  "finishedAt": "2026-03-18T05:07:39.782Z",
+  "rounds": 5,
   "finalValidation": {
-    "status": "pass",
-    "recommendation": "complete",
-    "summary": "[deterministic] all deterministic checks passed for engineering-vllm-inference-blueprint | [judge] Approve for production based on the latest evidence. The prior failing workspace test gate was repaired in the current round, the latest track reports clean formatting/lint/test gates, and the implementation summary covers the required scope: actual-cost settlement capped by pre-authorization, request-path policy enforcement, asynchronous draining of vLLM child stdout/stderr, and removal of panic-on-dependency-failure behavior in job handling, with tests updated for the billing and handled-error regressions.",
-    "findings": [],
+    "status": "warn",
+    "recommendation": "repair",
+    "summary": "[deterministic] all deterministic checks passed for engineering-vllm-inference-blueprint | [judge] [fallback from codex] All 9 success criteria are met. cargo check/clippy/fmt pass clean (zero first-party warnings), 32 tests pass across config (6), health (6), billing (11), and server (8) modules. Config-driven vLLM endpoint via OnceLock, tokio BufReader stderr draining, semaphore concurrency limiting, CI workflow with fmt/clippy/test/forge, spending-key validation, and billing limit enforcement are all correctly implemented. The prior round's two findings (spending key validation and hardcoded model name) are resolved.",
+    "findings": [
+      {
+        "severity": "low",
+        "title": "CorsLayer::permissive() in production HTTP server",
+        "body": "server.rs uses CorsLayer::permissive() which allows any origin, method, and header. For a billing-gated inference endpoint handling SpendAuth signatures, a more restrictive CORS policy would reduce attack surface. This is acceptable if the blueprint is designed to accept requests from arbitrary frontends, but should be a conscious decision.",
+        "evidence": "operator/src/server.rs:39 — .layer(CorsLayer::permissive())"
+      },
+      {
+        "severity": "low",
+        "title": "VLLM_MODEL_NAME fallback inconsistent with VLLM_BASE_URL/VLLM_CLIENT error handling",
+        "body": "lib.rs lines 79-101 return explicit errors if VLLM_BASE_URL or VLLM_CLIENT aren't initialized, but line 102-105 silently falls back to \"default\" for VLLM_MODEL_NAME. Since all three are set together in InferenceServer::start() (lines 175-177), this fallback is unreachable in practice, but the inconsistency is a minor code smell.",
+        "evidence": "operator/src/lib.rs:102-105 — .unwrap_or(\"default\") vs explicit error returns for the other two OnceLocks"
+      }
+    ],
     "scores": {
       "deterministic": 1,
       "quality": 1,
@@ -55,7 +64,7 @@
     "evidence": [
       {
         "kind": "test",
-        "label": "cargo fmt --all --check",
+        "label": "cargo fmt --check",
         "value": "",
         "metadata": {
           "passed": "true",
@@ -64,8 +73,8 @@
       },
       {
         "kind": "test",
-        "label": "cargo clippy --workspace -- -D warnings",
-        "value": "Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.41s\nwarning: the following packages contain code that will be rejected by a future version of Rust: trie-db v0.29.1\nnote: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`",
+        "label": "cargo clippy --workspace",
+        "value": "Checking vllm-inference v0.1.0 (/home/drew/code/vllm-inference-blueprint/operator)\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.69s\nwarning: the following packages contain code that will be rejected by a future version of Rust: trie-db v0.29.1\nnote: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`",
         "metadata": {
           "passed": "true",
           "exitCode": "0"
@@ -74,7 +83,7 @@
       {
         "kind": "test",
         "label": "cargo test --workspace",
-        "value": "running 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nrunning 23 tests\ntest test_config_default_max_concurrent_requests ... ok\ntest test_request_guard_records_tokens_on_drop ... ok\ntest test_metrics_gather_produces_valid_output ... ok\ntest test_request_guard_defaults_to_error ... ok\ntest test_request_guard_tracks_active_requests ... ok\ntest test_request_guard_records_success ... ok\ntest test_billing_actual_cost_less_than_preauth ... ok\ntest test_billing_calculate_cost ... ok\ntest test_billing_actual_cost_exceeds_preauth_cap ... ok\ntest test_billing_zero_usage_yields_zero_charge ... ok\ntest test_sse_no_usage_in_chunks ... ok\ntest test_sse_done_marker_present ... ok\ntest test_sse_usage_extraction ... ok\ntest test_run_inference_returns_error_on_connection_failure ... ok\ntest test_semaphore_limits_concurrency ... ok\ntest test_semaphore_zero_config_means_unlimited ... ok\ntest test_streaming_via_wiremock ... ok\ntest test_non_streaming_via_wiremock ... ok\ntest test_upstream_error_returns_error_status ... ok\ntest test_max_spend_per_request_rejection ... ok\ntest test_non_streaming_through_handler ... ok\ntest test_stream_field_defaults_to_false ... ok\ntest test_streaming_through_handler ... ok\n\ntest result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s\n\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\nFinished `test` profile [unoptimized + debuginfo] target(s) in 0.47s\nwarning: the following packages contain code that will be rejected by a future version of Rust: trie-db v0.29.1\nnote: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`\n     Running unittests src/lib.rs (target/debug/deps/vllm_inference-5989e26cf39f161d)\n     Running unittests src/main.rs (target/debug/deps/vllm_operator-0e53b3beb81f7323)\n     Running tests/server_tests.rs (target/debug/deps/server_tests-6e6fcc87fd21ebe7)\n   Doc-tests vllm_inference",
+        "value": "running 32 tests\ntest billing::tests::test_verify_rejects_expired_signature ... ok\ntest billing::tests::test_verify_rejects_invalid_commitment ... ok\ntest billing::tests::test_verify_rejects_invalid_amount ... ok\ntest billing::tests::test_verify_rejects_invalid_operator_address ... ok\ntest billing::tests::test_verify_rejects_bad_signature_length ... ok\ntest billing::tests::test_verify_rejects_bad_recovery_id ... ok\ntest config::tests::test_defaults_applied ... ok\ntest config::tests::test_deserialize_full_config ... ok\ntest config::tests::test_optional_fields ... ok\ntest health::tests::test_gpu_info_serialization ... ok\ntest config::tests::test_missing_required_field_fails ... ok\ntest health::tests::test_parse_malformed_line_skipped ... ok\ntest config::tests::test_roundtrip_serialize ... ok\ntest health::tests::test_parse_multi_gpu ... ok\ntest health::tests::test_parse_empty_output ... ok\ntest health::tests::test_parse_missing_optional_fields ... ok\ntest health::tests::test_parse_single_gpu ... ok\ntest server::tests::test_chat_response_roundtrip ... ok\ntest server::tests::test_default_values ... ok\ntest server::tests::test_chat_response_serialization ... ok\ntest server::tests::test_deserialize_chat_request_empty_messages ... ok\ntest server::tests::test_deserialize_chat_request_full ... ok\ntest server::tests::test_deserialize_chat_request_minimal ... ok\ntest server::tests::test_deserialize_chat_request_missing_messages_fails ... ok\ntest server::tests::test_semaphore_try_acquire_exhaustion ... ok\ntest billing::tests::test_billing_client_calculate_cost ... ok\ntest config::tests::test_load_from_file ... ok\ntest billing::tests::test_verify_rejects_operator_mismatch ... ok\ntest billing::tests::test_verify_with_real_signature ... ok\ntest billing::tests::test_verify_tampered_nonce_recovers_wrong_signer ... ok\ntest billing::tests::test_verify_tampered_amount_recovers_wrong_signer ... ok\ntest billing::tests::test_verify_tampered_commitment_recovers_wrong_signer ... ok\n\ntest result: ok. 32 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s\n\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\nFinished `test` profile [unoptimized + debuginfo] target(s) in 0.43s\nwarning: the following packages contain code that will be rejected by a future version of Rust: trie-db v0.29.1\nnote: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`\n     Running unittests src/lib.rs (target/debug/deps/vllm_inference-6432086cd6a895f5)\n     Running unittests src/main.rs (target/debug/deps/vllm_operator-0d66e52c92a57847)\n   Doc-tests vllm_inference",
         "metadata": {
           "passed": "true",
           "exitCode": "0"
@@ -82,7 +91,7 @@
       },
       {
         "kind": "test",
-        "label": "cd /home/drew/code/vllm-inference-blueprint && cargo fmt --all -- --check",
+        "label": "cd /home/drew/code/vllm-inference-blueprint && cargo fmt --check",
         "value": "",
         "metadata": {
           "passed": "true",
@@ -92,7 +101,7 @@
       {
         "kind": "test",
         "label": "cd /home/drew/code/vllm-inference-blueprint && cargo clippy --workspace -- -D warnings",
-        "value": "Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.44s\nwarning: the following packages contain code that will be rejected by a future version of Rust: trie-db v0.29.1\nnote: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`",
+        "value": "Checking vllm-inference v0.1.0 (/home/drew/code/vllm-inference-blueprint/operator)\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.47s\nwarning: the following packages contain code that will be rejected by a future version of Rust: trie-db v0.29.1\nnote: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`",
         "metadata": {
           "passed": "true",
           "exitCode": "0"
@@ -101,7 +110,7 @@
       {
         "kind": "test",
         "label": "cd /home/drew/code/vllm-inference-blueprint && cargo test --workspace",
-        "value": "running 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nrunning 23 tests\ntest test_config_default_max_concurrent_requests ... ok\ntest test_request_guard_records_success ... ok\ntest test_metrics_gather_produces_valid_output ... ok\ntest test_billing_calculate_cost ... ok\ntest test_request_guard_defaults_to_error ... ok\ntest test_request_guard_records_tokens_on_drop ... ok\ntest test_semaphore_limits_concurrency ... ok\ntest test_request_guard_tracks_active_requests ... ok\ntest test_sse_done_marker_present ... ok\ntest test_semaphore_zero_config_means_unlimited ... ok\ntest test_sse_no_usage_in_chunks ... ok\ntest test_sse_usage_extraction ... ok\ntest test_billing_actual_cost_exceeds_preauth_cap ... ok\ntest test_billing_zero_usage_yields_zero_charge ... ok\ntest test_billing_actual_cost_less_than_preauth ... ok\ntest test_run_inference_returns_error_on_connection_failure ... ok\ntest test_non_streaming_via_wiremock ... ok\ntest test_streaming_via_wiremock ... ok\ntest test_upstream_error_returns_error_status ... ok\ntest test_max_spend_per_request_rejection ... ok\ntest test_non_streaming_through_handler ... ok\ntest test_stream_field_defaults_to_false ... ok\ntest test_streaming_through_handler ... ok\n\ntest result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s\n\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\nFinished `test` profile [unoptimized + debuginfo] target(s) in 0.45s\nwarning: the following packages contain code that will be rejected by a future version of Rust: trie-db v0.29.1\nnote: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`\n     Running unittests src/lib.rs (target/debug/deps/vllm_inference-5989e26cf39f161d)\n     Running unittests src/main.rs (target/debug/deps/vllm_operator-0e53b3beb81f7323)\n     Running tests/server_tests.rs (target/debug/deps/server_tests-6e6fcc87fd21ebe7)\n   Doc-tests vllm_inference",
+        "value": "running 32 tests\ntest billing::tests::test_verify_rejects_expired_signature ... ok\ntest billing::tests::test_verify_rejects_invalid_commitment ... ok\ntest billing::tests::test_verify_rejects_invalid_amount ... ok\ntest billing::tests::test_verify_rejects_invalid_operator_address ... ok\ntest billing::tests::test_verify_rejects_bad_recovery_id ... ok\ntest billing::tests::test_verify_rejects_bad_signature_length ... ok\ntest config::tests::test_defaults_applied ... ok\ntest config::tests::test_deserialize_full_config ... ok\ntest billing::tests::test_billing_client_calculate_cost ... ok\ntest config::tests::test_optional_fields ... ok\ntest config::tests::test_missing_required_field_fails ... ok\ntest health::tests::test_parse_empty_output ... ok\ntest health::tests::test_gpu_info_serialization ... ok\ntest health::tests::test_parse_malformed_line_skipped ... ok\ntest health::tests::test_parse_missing_optional_fields ... ok\ntest health::tests::test_parse_multi_gpu ... ok\ntest health::tests::test_parse_single_gpu ... ok\ntest config::tests::test_roundtrip_serialize ... ok\ntest server::tests::test_chat_response_roundtrip ... ok\ntest server::tests::test_default_values ... ok\ntest server::tests::test_chat_response_serialization ... ok\ntest server::tests::test_deserialize_chat_request_empty_messages ... ok\ntest config::tests::test_load_from_file ... ok\ntest server::tests::test_deserialize_chat_request_full ... ok\ntest server::tests::test_deserialize_chat_request_minimal ... ok\ntest server::tests::test_deserialize_chat_request_missing_messages_fails ... ok\ntest server::tests::test_semaphore_try_acquire_exhaustion ... ok\ntest billing::tests::test_verify_rejects_operator_mismatch ... ok\ntest billing::tests::test_verify_with_real_signature ... ok\ntest billing::tests::test_verify_tampered_amount_recovers_wrong_signer ... ok\ntest billing::tests::test_verify_tampered_commitment_recovers_wrong_signer ... ok\ntest billing::tests::test_verify_tampered_nonce_recovers_wrong_signer ... ok\n\ntest result: ok. 32 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s\n\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\nFinished `test` profile [unoptimized + debuginfo] target(s) in 0.45s\nwarning: the following packages contain code that will be rejected by a future version of Rust: trie-db v0.29.1\nnote: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`\n     Running unittests src/lib.rs (target/debug/deps/vllm_inference-6432086cd6a895f5)\n     Running unittests src/main.rs (target/debug/deps/vllm_operator-0d66e52c92a57847)\n   Doc-tests vllm_inference",
         "metadata": {
           "passed": "true",
           "exitCode": "0"
@@ -110,16 +119,22 @@
       {
         "kind": "log",
         "label": "stdout",
-        "value": "{\"type\":\"thread.started\",\"thread_id\":\"019d0409-c94f-7ba1-8a25-0e7a38551f68\"}\n{\"type\":\"turn.started\"}\n{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"{\\\"status\\\":\\\"pass\\\",\\\"recommendation\\\":\\\"complete\\\",\\\"summary\\\":\\\"Approve for production based on the latest evidence. The prior failing workspace test gate was repaired in the current round, the latest track reports clean formatting/lint/test gates, and the implementation summary covers the required scope: actual-cost settlement capped by pre-authorization, request-path policy enforcement, asynchronous draining of vLLM child stdout/stderr, and removal of panic-on-dependency-failure behavior in job handling, with tests updated for the billing and handled-error regressions.\\\",\\\"findings\\\":[],\\\"scores\\\":{\\\"quality\\\":9,\\\"correctness\\\":9},\\\"evidence\\\":[{\\\"kind\\\":\\\"note\\\",\\\"label\\\":\\\"deterministic-gates\\\",\\\"value\\\":\\\"Latest track result states 'All gates are green,' which supersedes the prior round's recorded cargo test failure.\\\"},{\\\"kind\\\":\\\"note\\\",\\\"label\\\":\\\"billing-settlement\\\",\\\"value\\\":\\\"Implementation summary for server.rs handle_non_streaming says calculate_cost derives actual cost from metered prompt/completion tokens and configured pricing, and charge_amount = actual_cost.min(preauth_amount), so final claim is no longer the full pre-authorized spend_auth.amount.\\\"},{\\\"kind\\\":\\\"note\\\",\\\"label\\\":\\\"request-policy-enforcement\\\",\\\"value\\\":\\\"Implementation summary indicates max_spend_per_request and min_credit_balance are enforced on the request path so over-policy requests fail cleanly before billing/processing proceeds.\\\"},{\\\"kind\\\":\\\"note\\\",\\\"label\\\":\\\"vllm-process-hardening\\\",\\\"value\\\":\\\"Implementation summary says vllm.rs now actively drains both child stdout and stderr asynchronously and forwards output into tracing, removing the unread-pipe backpressure hazard while preserving the child-process model.\\\"},{\\\"kind\\\":\\\"note\\\",\\\"label\\\":\\\"job-error-propagation\\\",\\\"value\\\":\\\"Implementation summary says lib.rs removes expect-based panics from on-chain job handling so downstream failures such as vLLM downtime surface as handled job errors, and adjacent tests were updated to cover the billing settlement regression and a non-panicking failure path.\\\"}]}\"}}\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":15105,\"cached_input_tokens\":2432,\"output_tokens\":1712}}",
+        "value": "{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"duration_ms\":71333,\"duration_api_ms\":67567,\"num_turns\":14,\"result\":\"```json\\n{\\n  \\\"status\\\": \\\"pass\\\",\\n  \\\"recommendation\\\": \\\"complete\\\",\\n  \\\"summary\\\": \\\"All 9 success criteria are met. cargo check/clippy/fmt pass clean (zero first-party warnings), 32 tests pass across config (6), health (6), billing (11), and server (8) modules. Config-driven vLLM endpoint via OnceLock, tokio BufReader stderr draining, semaphore concurrency limiting, CI workflow with fmt/clippy/test/forge, spending-key validation, and billing limit enforcement are all correctly implemented. The prior round's two findings (spending key validation and hardcoded model name) are resolved.\\\",\\n  \\\"findings\\\": [\\n    {\\n      \\\"severity\\\": \\\"low\\\",\\n      \\\"title\\\": \\\"CorsLayer::permissive() in production HTTP server\\\",\\n      \\\"body\\\": \\\"server.rs uses CorsLayer::permissive() which allows any origin, method, and header. For a billing-gated inference endpoint handling SpendAuth signatures, a more restrictive CORS policy would reduce attack surface. This is acceptable if the blueprint is designed to accept requests from arbitrary frontends, but should be a conscious decision.\\\",\\n      \\\"evidence\\\": \\\"operator/src/server.rs:39 — .layer(CorsLayer::permissive())\\\"\\n    },\\n    {\\n      \\\"severity\\\": \\\"low\\\",\\n      \\\"title\\\": \\\"VLLM_MODEL_NAME fallback inconsistent with VLLM_BASE_URL/VLLM_CLIENT error handling\\\",\\n      \\\"body\\\": \\\"lib.rs lines 79-101 return explicit errors if VLLM_BASE_URL or VLLM_CLIENT aren't initialized, but line 102-105 silently falls back to \\\\\\\"default\\\\\\\" for VLLM_MODEL_NAME. Since all three are set together in InferenceServer::start() (lines 175-177), this fallback is unreachable in practice, but the inconsistency is a minor code smell.\\\",\\n      \\\"evidence\\\": \\\"operator/src/lib.rs:102-105 — .unwrap_or(\\\\\\\"default\\\\\\\") vs explicit error returns for the other two OnceLocks\\\"\\n    }\\n  ],\\n  \\\"scores\\\": {\\n    \\\"quality\\\": 9,\\n    \\\"correctness\\\": 9\\n  },\\n  \\\"evidence\\\": [\\n    {\\n      \\\"kind\\\": \\\"note\\\",\\n      \\\"label\\\": \\\"cargo check\\\",\\n      \\\"value\\\": \\\"Zero first-party warnings. Only upstream future-incompat notice from trie-db v0.29.1 (external dep, not actionable).\\\"\\n    },\\n    {\\n      \\\"kind\\\": \\\"note\\\",\\n      \\\"label\\\": \\\"cargo clippy -D warnings\\\",\\n      \\\"value\\\": \\\"Clean pass, zero errors.\\\"\\n    },\\n    {\\n      \\\"kind\\\": \\\"note\\\",\\n      \\\"label\\\": \\\"cargo fmt --check\\\",\\n      \\\"value\\\": \\\"Clean pass, no formatting issues.\\\"\\n    },\\n    {\\n      \\\"kind\\\": \\\"note\\\",\\n      \\\"label\\\": \\\"cargo test --workspace\\\",\\n      \\\"value\\\": \\\"32 passed, 0 failed. Coverage: config (6), health (6), billing (11), server (8).\\\"\\n    },\\n    {\\n      \\\"kind\\\": \\\"note\\\",\\n      \\\"label\\\": \\\"CI workflow\\\",\\n      \\\"value\\\": \\\".github/workflows/ci.yml exists with fmt, clippy, test matrix + Solidity forge build/test job.\\\"\\n    },\\n    {\\n      \\\"kind\\\": \\\"note\\\",\\n      \\\"label\\\": \\\"config-driven vLLM endpoint\\\",\\n      \\\"value\\\": \\\"OnceLock<String> set from config.vllm.host/port in InferenceServer::start() (lib.rs:174). No hardcoded http://127.0.0.1:8000 remains.\\\"\\n    },\\n    {\\n      \\\"kind\\\": \\\"note\\\",\\n      \\\"label\\\": \\\"stderr draining\\\",\\n      \\\"value\\\": \\\"vllm.rs:60-68 — tokio BufReader + lines() drain, forwarded to tracing::info.\\\"\\n    },\\n    {\\n      \\\"kind\\\": \\\"note\\\",\\n      \\\"label\\\": \\\"concurrency limiting\\\",\\n      \\\"value\\\": \\\"Semaphore::new(config.server.max_concurrent_requests) in lib.rs:225-227, enforced via try_acquire in server.rs:162 returning 429.\\\"\\n    },\\n    {\\n      \\\"kind\\\": \\\"note\\\",\\n      \\\"label\\\": \\\"spending key validation\\\",\\n      \\\"value\\\": \\\"server.rs:227-262 — recovered signer checked against on-chain getAccount().spendingKey via BillingClient::get_spending_key().\\\"\\n    },\\n    {\\n      \\\"kind\\\": \\\"note\\\",\\n      \\\"label\\\": \\\"billing limits enforced\\\",\\n      \\\"value\\\": \\\"server.rs:265-310 — max_spend_per_request and min_credit_balance validated against authorized amount.\\\"\\n    }\\n  ]\\n}\\n```\",\"stop_reason\":\"end_turn\",\"session_id\":\"d5e8e8f6-77e5-492b-b542-7e0902c66ff2\",\"total_cost_usd\":0.39280675,\"usage\":{\"input_tokens\":6,\"cache_creation_input_tokens\":39075,\"cache_read_input_tokens\":137816,\"output_tokens\":3186,\"server_tool_use\":{\"web_search_requests\":0,\"web_fetch_requests\":0},\"service_tier\":\"standard\",\"cache_creation\":{\"ephemeral_1h_input_tokens\":39075,\"ephemeral_5m_input_tokens\":0},\"inference_geo\":\"\",\"iterations\":[],\"speed\":\"standard\"},\"modelUsage\":{\"claude-opus-4-6[1m]\":{\"inputTokens\":6,\"outputTokens\":3186,\"cacheReadInputTokens\":137816,\"cacheCreationInputTokens\":39075,\"webSearchRequests\":0,\"costUSD\":0.39280675,\"contextWindow\":1000000,\"maxOutputTokens\":64000}},\"permission_denials\":[],\"fast_mode_state\":\"off\",\"uuid\":\"c436aaca-124b-4628-a44f-f623a6a38614\"}",
         "metadata": {
-          "durationMs": "44864",
-          "providerId": "codex",
+          "durationMs": "72037",
+          "providerId": "claude",
           "exitCode": "0",
-          "providerFormat": "jsonl",
-          "sessionId": "019d0409-c94f-7ba1-8a25-0e7a38551f68",
-          "inputTokens": "15105",
-          "cachedInputTokens": "2432",
-          "outputTokens": "1712"
+          "costUsd": "0.39280675",
+          "providerFormat": "json",
+          "sessionId": "d5e8e8f6-77e5-492b-b542-7e0902c66ff2",
+          "stopReason": "end_turn",
+          "numTurns": "14",
+          "modelIds": "claude-opus-4-6[1m]",
+          "inputTokens": "6",
+          "cacheCreationInputTokens": "39075",
+          "cacheReadInputTokens": "137816",
+          "outputTokens": "3186",
+          "totalCostUsd": "0.39280675"
         }
       },
       {
@@ -127,47 +142,78 @@
         "label": "stderr",
         "value": "",
         "metadata": {
-          "durationMs": "44864",
-          "providerId": "codex",
+          "durationMs": "72037",
+          "providerId": "claude",
           "exitCode": "0",
-          "providerFormat": "jsonl",
-          "sessionId": "019d0409-c94f-7ba1-8a25-0e7a38551f68",
-          "inputTokens": "15105",
-          "cachedInputTokens": "2432",
-          "outputTokens": "1712"
+          "costUsd": "0.39280675",
+          "providerFormat": "json",
+          "sessionId": "d5e8e8f6-77e5-492b-b542-7e0902c66ff2",
+          "stopReason": "end_turn",
+          "numTurns": "14",
+          "modelIds": "claude-opus-4-6[1m]",
+          "inputTokens": "6",
+          "cacheCreationInputTokens": "39075",
+          "cacheReadInputTokens": "137816",
+          "outputTokens": "3186",
+          "totalCostUsd": "0.39280675"
         }
       },
       {
         "kind": "note",
-        "label": "deterministic-gates",
-        "value": "Latest track result states 'All gates are green,' which supersedes the prior round's recorded cargo test failure."
+        "label": "cargo check",
+        "value": "Zero first-party warnings. Only upstream future-incompat notice from trie-db v0.29.1 (external dep, not actionable)."
       },
       {
         "kind": "note",
-        "label": "billing-settlement",
-        "value": "Implementation summary for server.rs handle_non_streaming says calculate_cost derives actual cost from metered prompt/completion tokens and configured pricing, and charge_amount = actual_cost.min(preauth_amount), so final claim is no longer the full pre-authorized spend_auth.amount."
+        "label": "cargo clippy -D warnings",
+        "value": "Clean pass, zero errors."
       },
       {
         "kind": "note",
-        "label": "request-policy-enforcement",
-        "value": "Implementation summary indicates max_spend_per_request and min_credit_balance are enforced on the request path so over-policy requests fail cleanly before billing/processing proceeds."
+        "label": "cargo fmt --check",
+        "value": "Clean pass, no formatting issues."
       },
       {
         "kind": "note",
-        "label": "vllm-process-hardening",
-        "value": "Implementation summary says vllm.rs now actively drains both child stdout and stderr asynchronously and forwards output into tracing, removing the unread-pipe backpressure hazard while preserving the child-process model."
+        "label": "cargo test --workspace",
+        "value": "32 passed, 0 failed. Coverage: config (6), health (6), billing (11), server (8)."
       },
       {
         "kind": "note",
-        "label": "job-error-propagation",
-        "value": "Implementation summary says lib.rs removes expect-based panics from on-chain job handling so downstream failures such as vLLM downtime surface as handled job errors, and adjacent tests were updated to cover the billing settlement regression and a non-panicking failure path."
+        "label": "CI workflow",
+        "value": ".github/workflows/ci.yml exists with fmt, clippy, test matrix + Solidity forge build/test job."
+      },
+      {
+        "kind": "note",
+        "label": "config-driven vLLM endpoint",
+        "value": "OnceLock<String> set from config.vllm.host/port in InferenceServer::start() (lib.rs:174). No hardcoded http://127.0.0.1:8000 remains."
+      },
+      {
+        "kind": "note",
+        "label": "stderr draining",
+        "value": "vllm.rs:60-68 — tokio BufReader + lines() drain, forwarded to tracing::info."
+      },
+      {
+        "kind": "note",
+        "label": "concurrency limiting",
+        "value": "Semaphore::new(config.server.max_concurrent_requests) in lib.rs:225-227, enforced via try_acquire in server.rs:162 returning 429."
+      },
+      {
+        "kind": "note",
+        "label": "spending key validation",
+        "value": "server.rs:227-262 — recovered signer checked against on-chain getAccount().spendingKey via BillingClient::get_spending_key()."
+      },
+      {
+        "kind": "note",
+        "label": "billing limits enforced",
+        "value": "server.rs:265-310 — max_spend_per_request and min_credit_balance validated against authorized amount."
       }
     ]
   },
   "outcome": {
-    "status": "completed",
-    "summary": "[deterministic] all deterministic checks passed for engineering-vllm-inference-blueprint | [judge] Approve for production based on the latest evidence. The prior failing workspace test gate was repaired in the current round, the latest track reports clean formatting/lint/test gates, and the implementation summary covers the required scope: actual-cost settlement capped by pre-authorization, request-path policy enforcement, asynchronous draining of vLLM child stdout/stderr, and removal of panic-on-dependency-failure behavior in job handling, with tests updated for the billing and handled-error regressions.",
-    "validated": true
+    "status": "max_rounds",
+    "summary": "maximum rounds reached",
+    "validated": false
   },
-  "reason": "[deterministic] all deterministic checks passed for engineering-vllm-inference-blueprint | [judge] Approve for production based on the latest evidence. The prior failing workspace test gate was repaired in the current round, the latest track reports clean formatting/lint/test gates, and the implementation summary covers the required scope: actual-cost settlement capped by pre-authorization, request-path policy enforcement, asynchronous draining of vLLM child stdout/stderr, and removal of panic-on-dependency-failure behavior in job handling, with tests updated for the billing and handled-error regressions."
+  "reason": "maximum rounds reached"
 }

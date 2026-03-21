@@ -1,0 +1,20 @@
+{
+  "summary": "Use claude to repair the latest validation issues",
+  "tracks": [
+    {
+      "id": "implement",
+      "goal": "Harden the vLLM inference blueprint operator for production readiness. This is a Tangle Blueprint that serves LLM inference via vLLM with ShieldedCredits anonymous billing. Fix every compiler warning, fix the hardcoded vLLM endpoint in lib.rs (should read from config), implement proper vLLM stderr log draining in vllm.rs, add request concurrency limiting in server.rs (max_concurrent_requests from config is defined but not enforced), fix all pub visibility mismatches, remove dead code. Add a GitHub Actions CI workflow that runs cargo fmt --check, cargo clippy, cargo test, and forge test. Add comprehensive Rust unit tests for config parsing, health/GPU detection (with mock nvidia-smi output), billing signature verification (with test vectors), and the HTTP server request validation. Every test must pass. Every warning must be resolved. Work inside /home/drew/code/vllm-inference-blueprint. Complete the full scope to production quality. Treat review, formatting, linting, and validation as part of completion.",
+      "capability": "code",
+      "metadata": {
+        "workerId": "claude"
+      },
+      "input": {
+        "workerId": "claude"
+      }
+    }
+  ],
+  "risks": [
+    "Resolve low finding: max_spend_per_request and min_credit_balance config fields are defined but never enforced",
+    "Resolve low finding: get_capabilities() is public dead code"
+  ]
+}

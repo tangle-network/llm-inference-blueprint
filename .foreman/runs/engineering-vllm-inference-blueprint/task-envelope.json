@@ -1,49 +1,37 @@
 {
-  "originalGoal": "Fix the 3 most critical production blockers found in the independent audit:\n\n1. BILLING BUG (CRITICAL): In server.rs handle_non_streaming, charge_amount is computed but IGNORED — claim_payment always claims the full pre-authorized spend_auth.amount. Fix: pass actual_cost (based on real token usage × price) to the claim, not the pre-auth amount. Also enforce max_spend_per_request and min_credit_balance from config.\n\n2. VLLM PIPE DEADLOCK (CRITICAL): vllm.rs spawns the subprocess with piped stdout/stderr but NEVER reads them. When the 64KB pipe buffer fills, vLLM blocks on write and hangs. Fix: drain both stdout and stderr via tokio BufReader into tracing::info/warn. This was noted in the code as a TODO.\n\n3. JOB HANDLER PANIC (CRITICAL): lib.rs uses .expect() on lines that can fail during on-chain job handling. If vLLM is down, this panics and kills the entire operator. Fix: return proper error results instead of panicking.\n\nRun cargo fmt, cargo clippy -D warnings, cargo test after fixes.",
+  "originalGoal": "Harden the vLLM inference blueprint operator for production readiness. This is a Tangle Blueprint that serves LLM inference via vLLM with ShieldedCredits anonymous billing. Fix every compiler warning, fix the hardcoded vLLM endpoint in lib.rs (should read from config), implement proper vLLM stderr log draining in vllm.rs, add request concurrency limiting in server.rs (max_concurrent_requests from config is defined but not enforced), fix all pub visibility mismatches, remove dead code. Add a GitHub Actions CI workflow that runs cargo fmt --check, cargo clippy, cargo test, and forge test. Add comprehensive Rust unit tests for config parsing, health/GPU detection (with mock nvidia-smi output), billing signature verification (with test vectors), and the HTTP server request validation. Every test must pass. Every warning must be resolved.",
   "hardenedTask": {
-    "goal": "Fix the three highest-severity production blockers in the Rust workspace: billing overclaiming in `server.rs`, vLLM subprocess pipe deadlock in `vllm.rs`, and panic-on-error behavior in on-chain job handling in `lib.rs`; then format, lint, and test the workspace.",
-    "expandedGoal": "Implement the fixes in a production-safe way across the existing Rust workspace. In `server.rs` `handle_non_streaming`, compute the final claim from actual metered usage and configured pricing, and use that value in `claim_payment` instead of the full pre-authorized `spend_auth.amount`; also enforce both `max_spend_per_request` and `min_credit_balance` from configuration on the request path so requests that exceed policy fail cleanly before billing/processing proceeds. In `vllm.rs`, keep the current child-process model but eliminate the stdout/stderr backpressure hazard by actively draining both pipes asynchronously with Tokio readers and forwarding output into tracing so the service cannot hang when vLLM writes enough logs to fill the OS pipe buffer. In `lib.rs`, remove `.expect()` usage from on-chain job-handling error paths and convert those branches to proper `Result`-returning behavior so dependency failures such as vLLM downtime surface as handled job errors rather than crashing the operator. The finished change should preserve existing behavior where correct, add or update tests around the billing and error-handling regressions where the repository already has adjacent tests, and leave the workspace clean under formatting, clippy, and test gates.",
+    "goal": "Harden the vLLM inference blueprint operator for production readiness. This is a Tangle Blueprint that serves LLM inference via vLLM with ShieldedCredits anonymous billing. Fix every compiler warning, fix the hardcoded vLLM endpoint in lib.rs (should read from config), implement proper vLLM stderr log draining in vllm.rs, add request concurrency limiting in server.rs (max_concurrent_requests from config is defined but not enforced), fix all pub visibility mismatches, remove dead code. Add a GitHub Actions CI workflow that runs cargo fmt --check, cargo clippy, cargo test, and forge test. Add comprehensive Rust unit tests for config parsing, health/GPU detection (with mock nvidia-smi output), billing signature verification (with test vectors), and the HTTP server request validation. Every test must pass. Every warning must be resolved.",
+    "expandedGoal": "Harden the vLLM inference blueprint operator for production readiness. This is a Tangle Blueprint that serves LLM inference via vLLM with ShieldedCredits anonymous billing. Fix every compiler warning, fix the hardcoded vLLM endpoint in lib.rs (should read from config), implement proper vLLM stderr log draining in vllm.rs, add request concurrency limiting in server.rs (max_concurrent_requests from config is defined but not enforced), fix all pub visibility mismatches, remove dead code. Add a GitHub Actions CI workflow that runs cargo fmt --check, cargo clippy, cargo test, and forge test. Add comprehensive Rust unit tests for config parsing, health/GPU detection (with mock nvidia-smi output), billing signature verification (with test vectors), and the HTTP server request validation. Every test must pass. Every warning must be resolved. Work inside /home/drew/code/vllm-inference-blueprint. Complete the full scope to production quality. Treat review, formatting, linting, and validation as part of completion.",
     "successCriteria": [
-      "In `server.rs` `handle_non_streaming`, the amount passed to `claim_payment` is derived from actual token usage and configured price, not from the full pre-authorization value `spend_auth.amount`.",
-      "The billing path still respects pre-authorization semantics: pre-auth may cap maximum liability, but final settlement/claim only charges the actual metered cost.",
-      "`max_spend_per_request` is enforced from configuration on the non-streaming request path, with a normal handled error when a request would exceed the configured limit.",
-      "`min_credit_balance` is enforced from configuration on the request path, with a normal handled error when the caller balance is below the configured minimum.",
-      "If actual usage is lower than the pre-authorized amount, the claimed amount is lower accordingly; there is no code path in the fixed handler that unconditionally claims the entire pre-authorized amount for non-streaming requests.",
-      "In `vllm.rs`, both child `stdout` and `stderr` are actively drained for the lifetime of the subprocess using Tokio async I/O primitives such as `tokio::io::BufReader` and line or chunk consumption.",
-      "The vLLM process spawn path no longer leaves piped `stdout` or `stderr` unread; there is no remaining TODO or equivalent behavior that can allow a full pipe buffer to block the child.",
-      "vLLM stdout is routed to tracing at an appropriate non-error level and stderr is routed to tracing at warning/error level, without blocking the main service flow.",
-      "In `lib.rs` job-handling paths, `.expect()` is removed anywhere an external/runtime failure can occur during on-chain job processing.",
-      "When vLLM or another downstream dependency fails during job handling, the operator returns/propagates a proper error result instead of panicking or terminating the process.",
-      "Formatting passes with no diffs after the change set.",
-      "`cargo clippy` passes with `-D warnings` for the workspace.",
-      "`cargo test --workspace` passes.",
-      "If tests are added or updated, they cover at least the billing settlement regression and one non-panicking job-handler failure path; tests must assert behavior, not only successful compilation."
+      "cargo check --workspace produces zero warnings",
+      "cargo clippy --workspace -- -D warnings produces zero errors",
+      "cargo fmt --check passes",
+      "cargo test --workspace passes with new tests covering config, health, billing, and server modules",
+      "A .github/workflows/ci.yml exists and would pass locally",
+      "The hardcoded vLLM endpoint http://127.0.0.1:8000 in lib.rs is replaced with config-driven endpoint",
+      "vllm.rs drains stderr via tokio BufReader instead of the TODO comment",
+      "server.rs enforces max_concurrent_requests from config using a semaphore or similar",
+      "work is grounded in actual repository state",
+      "completion is backed by executed checks or explicit blocker evidence"
     ],
     "checkCommands": [
-      "cargo fmt --all --check",
-      "cargo clippy --workspace -- -D warnings",
+      "cargo fmt --check",
+      "cargo clippy --workspace",
       "cargo test --workspace"
     ],
     "executionNotes": [
-      "Treat `spend_auth.amount` as an authorization ceiling, not the settlement amount. The claim path should receive a separately computed `actual_cost` value based on real token usage and configured pricing.",
-      "Do not silently clamp away policy violations. For `max_spend_per_request` and `min_credit_balance`, fail with explicit handled errors so the operator and callers can distinguish policy rejection from internal failure.",
-      "Keep monetary/accounting types consistent with the existing codebase. Avoid lossy conversions or mixing raw token counts and priced amounts without a single well-defined conversion point.",
-      "Make the billing computation deterministic and auditable: derive actual token usage from the response/usage object already emitted by inference, then multiply by the configured price source already used in the service.",
-      "For the vLLM subprocess, spawn independent async drain tasks for both `stdout` and `stderr` immediately after process creation and before waiting on child readiness/exit. Dropping one side unread is enough to reintroduce the deadlock.",
-      "Use Tokio async readers rather than blocking std I/O. The intended pattern is `BufReader` plus `lines()` or repeated async reads feeding `tracing` calls.",
-      "Log draining must be best-effort and non-fatal. A logging pipe read error should not itself crash the operator unless the existing architecture explicitly treats child-process management as fatal.",
-      "In `lib.rs`, replace `.expect()` in job-handling paths with `?`, `map_err`, or explicit error conversion that preserves context and returns a normal `Result` up the stack.",
-      "Do not convert panics into silent drops. Preserve observability by attaching context to propagated errors and logging at the boundary where the codebase already logs job failures.",
-      "Avoid broad refactors unrelated to the three blockers. The task is hardening and correctness, not redesign.",
-      "After code changes, run formatting first, then clippy, then tests so style noise does not obscure real diagnostics."
+      "Run ALL check commands before declaring done, including formatting and lint.",
+      "If checks fail, fix the issues — do not skip them.",
+      "If the task is ambiguous, preserve the original goal and add inferred criteria separately."
     ],
     "inferred": true
   },
   "checkCommands": [
-    "cargo fmt --all --check",
-    "cargo clippy --workspace -- -D warnings",
+    "cargo fmt --check",
+    "cargo clippy --workspace",
     "cargo test --workspace",
-    "cd /home/drew/code/vllm-inference-blueprint && cargo fmt --all -- --check",
+    "cd /home/drew/code/vllm-inference-blueprint && cargo fmt --check",
     "cd /home/drew/code/vllm-inference-blueprint && cargo clippy --workspace -- -D warnings",
     "cd /home/drew/code/vllm-inference-blueprint && cargo test --workspace"
   ],

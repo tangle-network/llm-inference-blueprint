@@ -1,31 +1,28 @@
 {
   "target": "/home/drew/code/vllm-inference-blueprint",
   "facts": [
-    "check-command: [object Object]",
-    "check-command: cd /home/drew/code/vllm-inference-blueprint && cargo fmt --all -- --check",
-    "check-command: cd /home/drew/code/vllm-inference-blueprint && cargo clippy --workspace -- -D warnings",
-    "check-command: cd /home/drew/code/vllm-inference-blueprint && cargo test --workspace",
-    "check-command: cargo fmt --all",
-    "check-command: cargo fmt --all -- --check",
-    "check-command: cargo clippy --workspace -- -D warnings",
-    "check-command: cargo test --workspace",
-    "check-command: forge test",
-    "check-command: cargo fmt --all --check"
+    "latest goal: Harden the vLLM inference blueprint operator for production readiness. This is a Tangle Blueprint that serves LLM inference via vLLM with ShieldedCredits anonymous billing. Fix every compiler warning, fix the hardcoded vLLM endpoint in lib.rs (should read from config), implement proper vLLM stderr log draining in vllm.rs, add request concurrency limiting in server.rs (max_concurrent_requests from config is defined but not enforced), fix all pub visibility mismatches, remove dead code. Add a GitHub Actions CI workflow that runs cargo fmt --check, cargo clippy, cargo test, and forge test. Add comprehensive Rust unit tests for config parsing, health/GPU detection (with mock nvidia-smi output), billing signature verification (with test vectors), and the HTTP server request validation. Every test must pass. Every warning must be resolved.",
+    "expanded goal: Harden the vLLM inference blueprint operator for production readiness. This is a Tangle Blueprint that serves LLM inference via vLLM with ShieldedCredits anonymous billing. Fix every compiler warning, fix the hardcoded vLLM endpoint in lib.rs (should read from config), implement proper vLLM stderr log draining in vllm.rs, add request concurrency limiting in server.rs (max_concurrent_requests from config is defined but not enforced), fix all pub visibility mismatches, remove dead code. Add a GitHub Actions CI workflow that runs cargo fmt --check, cargo clippy, cargo test, and forge test. Add comprehensive Rust unit tests for config parsing, health/GPU detection (with mock nvidia-smi output), billing signature verification (with test vectors), and the HTTP server request validation. Every test must pass. Every warning must be resolved. Work inside /home/drew/code/vllm-inference-blueprint. Complete the full scope to production quality. Treat review, formatting, linting, and validation as part of completion.",
+    "criterion: cargo check --workspace produces zero warnings",
+    "criterion: cargo clippy --workspace -- -D warnings produces zero errors",
+    "criterion: cargo fmt --check passes",
+    "criterion: cargo test --workspace passes with new tests covering config, health, billing, and server modules",
+    "criterion: A .github/workflows/ci.yml exists and would pass locally",
+    "criterion: The hardcoded vLLM endpoint http://127.0.0.1:8000 in lib.rs is replaced with config-driven endpoint",
+    "criterion: vllm.rs drains stderr via tokio BufReader instead of the TODO comment",
+    "criterion: server.rs enforces max_concurrent_requests from config using a semaphore or similar",
+    "criterion: work is grounded in actual repository state",
+    "criterion: completion is backed by executed checks or explicit blocker evidence",
+    "check: cargo fmt --check",
+    "check: cargo clippy --workspace",
+    "check: cargo test --workspace",
+    "check: cd /home/drew/code/vllm-inference-blueprint && cargo fmt --check",
+    "check: cd /home/drew/code/vllm-inference-blueprint && cargo clippy --workspace -- -D warnings",
+    "check: cd /home/drew/code/vllm-inference-blueprint && cargo test --workspace"
   ],
   "invariants": [],
   "failureModes": [
-    "Check failed: [object Object]",
-    "Check failed: cd /home/drew/code/vllm-inference-blueprint && cargo test --workspace",
-    "Repository inspection is blocked by the runtime sandbox",
-    "No success criterion could be verified",
-    "Formatting, lint, and test gates are unproven",
-    "Check failed: forge test",
-    "Independent code inspection was impossible, so there is no trustworthy basis for approval",
-    "Mandatory verification gates are not evidenced as passing",
-    "Every major success criterion remains unverified",
-    "Reported implementation surface is materially inconsistent with the requested scope",
-    "Primary repository inspection was impossible in this review session",
-    "Required quality gates were not independently proven",
-    "Streaming wire-format success criteria remain unverified at review time"
+    "CorsLayer::permissive() in production HTTP server",
+    "VLLM_MODEL_NAME fallback inconsistent with VLLM_BASE_URL/VLLM_CLIENT error handling"
   ]
 }

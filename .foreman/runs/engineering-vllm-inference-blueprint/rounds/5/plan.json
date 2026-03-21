@@ -3,7 +3,7 @@
   "tracks": [
     {
       "id": "implement",
-      "goal": "Implement a real streaming code path for chat completions that is activated by the request body's `stream` field, with `ChatCompletionRequest` deserializing that field correctly and defaulting to non-streaming behavior when it is absent or false. The streaming path must avoid collecting the full upstream response in memory, must emit `data: {json}\\n\\n` events as chunks arrive, and must terminate with `data: [DONE]\\n\\n`. The existing non-streaming `/v1/chat/completions` behavior must remain unchanged. Add a focused automated test that exercises the streaming branch end to end at the HTTP layer and verifies the response framing, including SSE event formatting and terminal `[DONE]`. The implementation should match existing repository conventions for handlers, request/response types, and async streaming primitives, and it must meet the repo's normal quality bar for tests, lint cleanliness, and no warnings.",
+      "goal": "Harden the vLLM inference blueprint operator for production readiness. This is a Tangle Blueprint that serves LLM inference via vLLM with ShieldedCredits anonymous billing. Fix every compiler warning, fix the hardcoded vLLM endpoint in lib.rs (should read from config), implement proper vLLM stderr log draining in vllm.rs, add request concurrency limiting in server.rs (max_concurrent_requests from config is defined but not enforced), fix all pub visibility mismatches, remove dead code. Add a GitHub Actions CI workflow that runs cargo fmt --check, cargo clippy, cargo test, and forge test. Add comprehensive Rust unit tests for config parsing, health/GPU detection (with mock nvidia-smi output), billing signature verification (with test vectors), and the HTTP server request validation. Every test must pass. Every warning must be resolved. Work inside /home/drew/code/vllm-inference-blueprint. Complete the full scope to production quality. Treat review, formatting, linting, and validation as part of completion.",
       "capability": "code",
       "metadata": {
         "workerId": "claude"
@@ -14,8 +14,7 @@
     }
   ],
   "risks": [
-    "Resolve critical finding: Primary code inspection is blocked by the runtime sandbox",
-    "Resolve critical finding: Required quality gates were not independently proven in this review session",
-    "Resolve high finding: Streaming wire-format success criteria remain unverified at review time"
+    "Resolve medium finding: Off-chain signature verification does not validate recovered signer against on-chain spending key",
+    "Resolve low finding: On-chain job handler hardcodes model name 'default' instead of reading from config"
   ]
 }

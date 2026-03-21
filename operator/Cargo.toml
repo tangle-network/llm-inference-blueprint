@@ -47,6 +47,8 @@ bytes = "1"
 uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
-blueprint-sdk = { version = "0.1.0-alpha.22", features = ["testing", "tangle"] }
-blueprint-anvil-testing-utils = { version = "0.1.0-alpha.21" }
+blueprint-sdk = { path = "/home/drew/code/blueprint/crates/sdk", features = ["testing", "tangle"] }
+blueprint-anvil-testing-utils = { path = "/home/drew/code/blueprint/crates/testing-utils/anvil" }
 wiremock = "0.6"
+alloy-primitives = "1"
+alloy-sol-types = "1"

@@ -78,6 +78,18 @@ fn register_vllm_endpoint(config: &OperatorConfig) -> Result<(), RunnerError> {
     Ok(())
 }
 
+/// Initialize the vLLM endpoint for testing. Call this before submitting jobs
+/// when running without the full InferenceServer background service (e.g. in
+/// BlueprintHarness tests with a mock vLLM endpoint).
+pub fn init_for_testing(base_url: &str, model: &str) {
+    let endpoint = VllmEndpoint {
+        url: format!("{base_url}/v1/chat/completions"),
+        model: model.to_string(),
+        client: reqwest::Client::new(),
+    };
+    let _ = VLLM_ENDPOINT.set(endpoint);
+}
+
 // --- Router ---
 
 pub fn router() -> Router {

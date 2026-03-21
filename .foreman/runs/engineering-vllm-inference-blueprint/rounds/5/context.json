@@ -1,22 +1,19 @@
 {
-  "summary": "12 changed file(s) on feat/foreman-complete-blueprint\n\nKnown memory:\n- check-command: [object Object]\n- check-command: cd /home/drew/code/vllm-inference-blueprint && cargo fmt --all -- --check\n- check-command: cd /home/drew/code/vllm-inference-blueprint && cargo clippy --workspace -- -D warnings\n- check-command: cd /home/drew/code/vllm-inference-blueprint && cargo test --workspace\n- check-command: cargo fmt --all\n- check-command: cargo fmt --all -- --check\n- check-command: cargo clippy --workspace -- -D warnings\n- check-command: cargo test --workspace\n- check-command: forge test\n- known failure: Check failed: [object Object]\n- known failure: Check failed: cd /home/drew/code/vllm-inference-blueprint && cargo test --workspace\n- known failure: Repository inspection is blocked by the runtime sandbox\n- known failure: No success criterion could be verified\n- known failure: Formatting, lint, and test gates are unproven\n- preferred workers: claude, codex\n\nPrior round:\n- implement: claude completed successfully\n- validation: [deterministic] all deterministic checks passed for engineering-vllm-inference-blueprint | [judge] Deployment approval is blocked. I could not perform primary repository inspection or independently execute the required validation commands in this session because every available local execution path failed before any repo command started. Without direct code inspection and local proof of the streaming HTTP behavior, request deserialization, and quality gates, I will not approve production deployment based only on an implementation worker's self-report.\n- finding: Primary code inspection is blocked by the runtime sandbox\n- finding: Required quality gates were not independently proven in this review session\n- finding: Streaming wire-format success criteria remain unverified at review time\n- repair: Resolve critical finding: Primary code inspection is blocked by the runtime sandbox\n- repair: Resolve critical finding: Required quality gates were not independently proven in this review session\n- repair: Resolve high finding: Streaming wire-format success criteria remain unverified at review time",
+  "summary": "9 changed file(s) on feat/foreman-hardening\n\nPrior round:\n- implement: claude completed successfully\n- validation: [deterministic] all deterministic checks passed for engineering-vllm-inference-blueprint | [judge] [fallback from codex] All nine success criteria are met. cargo check/clippy/fmt pass clean, 32 tests pass across config (6), health (6), billing (11), and server (8) modules. Config-driven vLLM endpoint via OnceLock, tokio BufReader stderr draining, semaphore concurrency limiting, CI workflow, and billing limit enforcement are all correctly implemented. Two design observations remain but are not blocking defects.\n- finding: Off-chain signature verification does not validate recovered signer against on-chain spending key\n- finding: On-chain job handler hardcodes model name 'default' instead of reading from config\n- repair: Resolve medium finding: Off-chain signature verification does not validate recovered signer against on-chain spending key\n- repair: Resolve low finding: On-chain job handler hardcodes model name 'default' instead of reading from config",
   "state": {
     "repoRoot": "/home/drew/code/vllm-inference-blueprint",
-    "branch": "feat/foreman-complete-blueprint",
+    "branch": "feat/foreman-hardening",
     "headSha": "dc3219004b7a33a754eab5cc9dae0d9fb53f591d",
     "changedFiles": [
-      "argo.toml",
-      "ontracts/src/InferenceBSM.sol",
-      "ontracts/test/InferenceBSM.t.sol",
-      "perator/Cargo.toml",
       "perator/src/billing.rs",
+      "perator/src/config.rs",
+      "perator/src/health.rs",
       "perator/src/lib.rs",
       "perator/src/main.rs",
       "perator/src/server.rs",
       "perator/src/vllm.rs",
       ".foreman/",
-      "operator/src/metrics.rs",
-      "operator/tests/"
+      ".github/"
     ],
     "dirty": true
   },
@@ -24,7 +21,11 @@
     {
       "kind": "log",
       "label": "git-status",
-      "value": "M Cargo.toml\n M contracts/src/InferenceBSM.sol\n M contracts/test/InferenceBSM.t.sol\n M operator/Cargo.toml\n M operator/src/billing.rs\n M operator/src/lib.rs\n M operator/src/main.rs\n M operator/src/server.rs\n M operator/src/vllm.rs\n?? .foreman/\n?? operator/src/metrics.rs\n?? operator/tests/"
+      "value": "M operator/src/billing.rs\n M operator/src/config.rs\n M operator/src/health.rs\n M operator/src/lib.rs\n M operator/src/main.rs\n M operator/src/server.rs\n M operator/src/vllm.rs\n?? .foreman/\n?? .github/"
     }
-  ]
+  ],
+  "metadata": {
+    "repoPath": "/home/drew/code/vllm-inference-blueprint",
+    "reviewWorkerId": "codex"
+  }
 }

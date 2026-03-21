@@ -1,0 +1,8 @@
+{
+  "summary": "Repair the issues identified during validation.",
+  "actions": [
+    "Resolve low finding: spend_auth.amount parsed as u64 with silent fallback to 0",
+    "Resolve low finding: reqwest::Client allocated per on-chain job invocation",
+    "Resolve low finding: Billing is opt-in at HTTP layer — no spend_auth means free inference"
+  ]
+}
