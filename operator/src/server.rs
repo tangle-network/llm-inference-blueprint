@@ -345,13 +345,15 @@ fn x402_payment_required(state: &AppState) -> Response {
     Response::builder()
         .status(StatusCode::PAYMENT_REQUIRED)
         .header(header::CONTENT_TYPE, "application/json")
-        .header(
-            X402_PAYMENT_REQUIRED,
-            estimated_amount.to_string(),
-        )
+        .header(X402_PAYMENT_REQUIRED, estimated_amount.to_string())
         .header(
             X402_PAYMENT_TOKEN,
-            state.config.billing.payment_token_address.as_deref().unwrap_or("0x0000000000000000000000000000000000000000"),
+            state
+                .config
+                .billing
+                .payment_token_address
+                .as_deref()
+                .unwrap_or("0x0000000000000000000000000000000000000000"),
         )
         .header(
             X402_PAYMENT_RECIPIENT,

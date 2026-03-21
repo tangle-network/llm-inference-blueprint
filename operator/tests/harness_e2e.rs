@@ -17,12 +17,12 @@
 use alloy_primitives::Bytes;
 use alloy_sol_types::SolValue;
 use anyhow::{Context, Result};
-use axum::{Json, Router as HttpRouter, routing::post};
-use blueprint_anvil_testing_utils::{BlueprintHarness, missing_tnt_core_artifacts};
-use serde_json::{Value, json};
+use axum::{routing::post, Json, Router as HttpRouter};
+use blueprint_anvil_testing_utils::{missing_tnt_core_artifacts, BlueprintHarness};
+use serde_json::{json, Value};
 use std::time::Duration;
 use tokio::time::timeout;
-use vllm_inference::{INFERENCE_JOB, InferenceRequest, InferenceResult, init_for_testing, router};
+use vllm_inference::{init_for_testing, router, InferenceRequest, InferenceResult, INFERENCE_JOB};
 
 const TEST_TIMEOUT: Duration = Duration::from_secs(120);
 const MOCK_MODEL: &str = "test-model";
@@ -144,8 +144,8 @@ async fn test_inference_job_lifecycle() -> Result<()> {
         println!("Got result ({} bytes)", output.len());
 
         // 6. Decode and verify
-        let result = InferenceResult::abi_decode(&output)
-            .context("failed to decode InferenceResult")?;
+        let result =
+            InferenceResult::abi_decode(&output).context("failed to decode InferenceResult")?;
         println!("  text: {}", result.text);
         println!("  promptTokens: {}", result.promptTokens);
         println!("  completionTokens: {}", result.completionTokens);
