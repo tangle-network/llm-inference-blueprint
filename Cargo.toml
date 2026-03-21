@@ -9,7 +9,7 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/tangle-network/vllm-inference-blueprint"
 
 [workspace.dependencies]
-blueprint-sdk = { version = "0.1.0-alpha.22", features = ["std", "tangle", "macros"] }
+blueprint-sdk = { path = "/home/drew/code/blueprint/crates/sdk", features = ["std", "tangle", "macros"] }
 alloy = { version = "1", features = ["full", "signer-local", "provider-http"] }
 alloy-sol-types = "1"
 tokio = { version = "1", features = ["full"] }

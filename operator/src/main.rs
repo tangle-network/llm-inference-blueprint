@@ -1,8 +1,10 @@
 use std::sync::Arc;
 
+use blueprint_sdk::contexts::tangle::TangleClientContext;
 use blueprint_sdk::runner::config::BlueprintEnvironment;
 use blueprint_sdk::runner::tangle::config::TangleConfig;
 use blueprint_sdk::runner::BlueprintRunner;
+use blueprint_sdk::tangle::{TangleConsumer, TangleProducer};
 
 use vllm_inference::config::OperatorConfig;
 use vllm_inference::health;
@@ -36,22 +38,43 @@ async fn main() -> Result<(), blueprint_sdk::Error> {
         }
     }
 
-    // Load operator config from file or env
+    // Load operator config
     let config = OperatorConfig::load(None)
         .map_err(|e| blueprint_sdk::Error::Other(format!("config load failed: {e}")))?;
     let config = Arc::new(config);
 
-    // Load blueprint environment (CLI args, keystore, RPC endpoints)
+    // Load blueprint environment
     let env = BlueprintEnvironment::load()?;
 
-    // Create the inference background service (vLLM subprocess + HTTP server)
+    // Get Tangle client
+    let tangle_client = env
+        .tangle_client()
+        .await
+        .map_err(|e| blueprint_sdk::Error::Other(e.to_string()))?;
+
+    // Get service ID
+    let service_id = env
+        .protocol_settings
+        .tangle()
+        .map_err(|e| blueprint_sdk::Error::Other(e.to_string()))?
+        .service_id
+        .ok_or_else(|| blueprint_sdk::Error::Other("No service ID configured".to_string()))?;
+
+    // Producer: polls for JobSubmitted events
+    let tangle_producer = TangleProducer::new(tangle_client.clone(), service_id);
+
+    // Consumer: submits results via submitResult
+    let tangle_consumer = TangleConsumer::new(tangle_client.clone());
+
+    // Background service: vLLM subprocess + HTTP server
     let inference_server = InferenceServer {
         config: config.clone(),
     };
 
-    // Build and run
     BlueprintRunner::builder(TangleConfig::default(), env)
         .router(vllm_inference::router())
+        .producer(tangle_producer)
+        .consumer(tangle_consumer)
         .background_service(inference_server)
         .run()
         .await?;
