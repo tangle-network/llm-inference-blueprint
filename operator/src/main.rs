@@ -1,10 +1,15 @@
 use std::sync::Arc;
 
-use blueprint_sdk::contexts::tangle::TangleClientContext;
+use blueprint_sdk::crypto::sp_core::SpSr25519;
+use blueprint_sdk::crypto::tangle_pair_signer::sp_core;
+use blueprint_sdk::crypto::tangle_pair_signer::TanglePairSigner;
+use blueprint_sdk::keystore::backends::Backend;
 use blueprint_sdk::runner::config::BlueprintEnvironment;
 use blueprint_sdk::runner::tangle::config::TangleConfig;
 use blueprint_sdk::runner::BlueprintRunner;
-use blueprint_sdk::tangle::{TangleConsumer, TangleProducer};
+use blueprint_sdk::tangle::consumer::TangleConsumer;
+use blueprint_sdk::tangle::producer::TangleProducer;
+use blueprint_sdk::tangle_subxt::subxt::{OnlineClient, PolkadotConfig};
 
 use vllm_inference::config::OperatorConfig;
 use vllm_inference::health;
@@ -45,26 +50,28 @@ async fn main() -> Result<(), blueprint_sdk::Error> {
 
     // Load blueprint environment
     let env = BlueprintEnvironment::load()?;
+    let keystore = env.keystore();
+    let ws_url = env.ws_rpc_endpoint.to_string();
 
-    // Get Tangle client
-    let tangle_client = env
-        .tangle_client()
+    // Connect to Tangle via WebSocket
+    let client = OnlineClient::<PolkadotConfig>::from_insecure_url(&ws_url)
         .await
-        .map_err(|e| blueprint_sdk::Error::Other(e.to_string()))?;
+        .map_err(|e| blueprint_sdk::Error::Other(format!("Tangle connection failed: {e}")))?;
 
-    // Get service ID
-    let service_id = env
-        .protocol_settings
-        .tangle()
-        .map_err(|e| blueprint_sdk::Error::Other(e.to_string()))?
-        .service_id
-        .ok_or_else(|| blueprint_sdk::Error::Other("No service ID configured".to_string()))?;
+    // Producer: subscribes to finalized blocks and extracts JobCalled events
+    let tangle_producer = TangleProducer::finalized_blocks(client.clone())
+        .await
+        .map_err(|e| blueprint_sdk::Error::Other(format!("TangleProducer failed: {e}")))?;
 
-    // Producer: polls for JobSubmitted events
-    let tangle_producer = TangleProducer::new(tangle_client.clone(), service_id);
-
-    // Consumer: submits results via submitResult
-    let tangle_consumer = TangleConsumer::new(tangle_client.clone());
+    // Consumer: submits job results via sr25519 signer
+    let sr25519_key = keystore
+        .first_local::<SpSr25519>()
+        .map_err(|e| blueprint_sdk::Error::Other(format!("no sr25519 key: {e}")))?;
+    let sr25519_pair = keystore
+        .get_secret::<SpSr25519>(&sr25519_key)
+        .map_err(|e| blueprint_sdk::Error::Other(format!("sr25519 secret load failed: {e}")))?;
+    let signer = TanglePairSigner::<sp_core::sr25519::Pair>::new(sr25519_pair.0);
+    let tangle_consumer = TangleConsumer::new(client, signer);
 
     // Background service: vLLM subprocess + HTTP server
     let inference_server = InferenceServer {
