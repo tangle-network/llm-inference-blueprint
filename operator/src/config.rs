@@ -1,8 +1,9 @@
 use serde::{Deserialize, Serialize};
+use std::fmt;
 use std::path::PathBuf;
 
 /// Top-level operator configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct OperatorConfig {
     /// Tangle network configuration
     pub tangle: TangleConfig,
@@ -24,7 +25,20 @@ pub struct OperatorConfig {
     pub rln: Option<RLNConfig>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+// Redact operator_key in Debug output to prevent accidental logging of secrets.
+impl fmt::Debug for OperatorConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("OperatorConfig")
+            .field("tangle", &self.tangle)
+            .field("vllm", &self.vllm)
+            .field("server", &self.server)
+            .field("billing", &self.billing)
+            .field("gpu", &self.gpu)
+            .finish()
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
 pub struct TangleConfig {
     /// JSON-RPC endpoint for the Tangle EVM chain
     pub rpc_url: String,
@@ -47,6 +61,21 @@ pub struct TangleConfig {
 
     /// Service ID (set after service activation)
     pub service_id: Option<u64>,
+}
+
+// Redact operator_key in Debug output.
+impl fmt::Debug for TangleConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TangleConfig")
+            .field("rpc_url", &self.rpc_url)
+            .field("chain_id", &self.chain_id)
+            .field("operator_key", &"[REDACTED]")
+            .field("tangle_core", &self.tangle_core)
+            .field("shielded_credits", &self.shielded_credits)
+            .field("blueprint_id", &self.blueprint_id)
+            .field("service_id", &self.service_id)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -96,6 +125,29 @@ pub struct ServerConfig {
     /// Maximum concurrent requests
     #[serde(default = "default_max_concurrent")]
     pub max_concurrent_requests: usize,
+
+    /// Maximum request body size in bytes (default 2 MiB)
+    #[serde(default = "default_max_request_body_bytes")]
+    pub max_request_body_bytes: usize,
+
+    /// Per-request timeout for streaming connections in seconds (default 300)
+    #[serde(default = "default_stream_timeout_secs")]
+    pub stream_timeout_secs: u64,
+
+    /// Per-chunk idle timeout in seconds for streaming responses (default 30).
+    /// If vLLM doesn't send data within this window, the stream is terminated.
+    #[serde(default = "default_idle_chunk_timeout_secs")]
+    pub idle_chunk_timeout_secs: u64,
+
+    /// Maximum size of the SSE line buffer in bytes (default 1 MiB).
+    /// Prevents unbounded memory growth from malformed upstream data.
+    #[serde(default = "default_max_line_buf_bytes")]
+    pub max_line_buf_bytes: usize,
+
+    /// Maximum concurrent requests per credit account (commitment).
+    /// 0 = unlimited (default). Prevents a single account from monopolizing all slots.
+    #[serde(default)]
+    pub max_per_account_requests: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -116,6 +168,42 @@ pub struct BillingConfig {
 
     /// Minimum balance required in a credit account to serve a request
     pub min_credit_balance: u64,
+
+    /// Whether billing (spend_auth) is required on every request.
+    /// When true, requests without spend_auth are rejected with 402.
+    #[serde(default = "default_billing_required")]
+    pub billing_required: bool,
+
+    /// Minimum charge amount per request (gas cost protection).
+    /// Requests whose pre-authorized amount is below this are rejected
+    /// to prevent operators from losing money on gas fees.
+    #[serde(default)]
+    pub min_charge_amount: u64,
+
+    /// Maximum retries for claim_payment on-chain calls.
+    #[serde(default = "default_claim_max_retries")]
+    pub claim_max_retries: u32,
+
+    /// Clock skew tolerance in seconds for SpendAuth expiry checks.
+    #[serde(default = "default_clock_skew_tolerance")]
+    pub clock_skew_tolerance_secs: u64,
+
+    /// Maximum gas price in gwei the operator is willing to pay for billing txs.
+    /// If the current gas price exceeds this, billing transactions are deferred.
+    /// 0 = no cap (default).
+    #[serde(default)]
+    pub max_gas_price_gwei: u64,
+
+    /// Path to persist used nonces across restarts (replay protection).
+    /// Without this, nonces are in-memory only and lost on restart,
+    /// allowing replay of unexpired SpendAuth signatures.
+    #[serde(default)]
+    pub nonce_store_path: Option<PathBuf>,
+
+    /// ERC-20 token address for x402 payment (e.g. tsUSD).
+    /// Included in 402 Payment Required responses so clients know which token to use.
+    #[serde(default)]
+    pub payment_token_address: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -181,6 +269,30 @@ fn default_billing_required() -> bool {
 }
 
 fn default_monitor_interval() -> u64 {
+    30
+}
+
+fn default_max_request_body_bytes() -> usize {
+    16 * 1024 * 1024 // 16 MiB
+}
+
+fn default_stream_timeout_secs() -> u64 {
+    300
+}
+
+fn default_idle_chunk_timeout_secs() -> u64 {
+    30
+}
+
+fn default_max_line_buf_bytes() -> usize {
+    1024 * 1024 // 1 MiB
+}
+
+fn default_claim_max_retries() -> u32 {
+    3
+}
+
+fn default_clock_skew_tolerance() -> u64 {
     30
 }
 

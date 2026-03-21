@@ -19,7 +19,7 @@ fn setup_log() {
 async fn main() -> Result<(), blueprint_sdk::Error> {
     setup_log();
 
-    // Check GPU availability
+    // Check GPU availability (non-fatal)
     match health::detect_gpus().await {
         Ok(gpus) => {
             tracing::info!(count = gpus.len(), "detected GPUs");

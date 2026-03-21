@@ -27,8 +27,7 @@ async fn test_real_inference_via_ollama() {
         return;
     }
 
-    let base_url =
-        env::var("OLLAMA_URL").unwrap_or_else(|_| "http://127.0.0.1:11434".to_string());
+    let base_url = env::var("OLLAMA_URL").unwrap_or_else(|_| "http://127.0.0.1:11434".to_string());
     let model = env::var("OLLAMA_MODEL").unwrap_or_else(|_| "qwen2:0.5b".to_string());
 
     let client = reqwest::Client::new();
@@ -58,7 +57,10 @@ async fn test_real_inference_via_ollama() {
     assert!(json["id"].is_string(), "Missing id");
     assert_eq!(json["object"], "chat.completion", "Wrong object type");
     assert!(json["choices"].is_array(), "Missing choices array");
-    assert!(!json["choices"].as_array().unwrap().is_empty(), "Empty choices");
+    assert!(
+        !json["choices"].as_array().unwrap().is_empty(),
+        "Empty choices"
+    );
 
     let content = json["choices"][0]["message"]["content"]
         .as_str()
@@ -69,7 +71,10 @@ async fn test_real_inference_via_ollama() {
 
     // Verify usage is reported
     let usage = &json["usage"];
-    assert!(usage["prompt_tokens"].as_u64().unwrap_or(0) > 0, "No prompt tokens");
+    assert!(
+        usage["prompt_tokens"].as_u64().unwrap_or(0) > 0,
+        "No prompt tokens"
+    );
     assert!(
         usage["completion_tokens"].as_u64().unwrap_or(0) > 0,
         "No completion tokens"

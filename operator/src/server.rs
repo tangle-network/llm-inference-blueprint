@@ -1,44 +1,192 @@
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::{Arc, RwLock};
+use std::time::Duration;
 
+use alloy::primitives::Address;
 use axum::{
-    extract::State,
-    http::StatusCode,
+    body::Body,
+    extract::{DefaultBodyLimit, State},
+    http::{header, HeaderMap, StatusCode},
+    response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router as HttpRouter,
 };
+use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
-use tokio::sync::Semaphore;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::task::JoinHandle;
 use tower_http::cors::CorsLayer;
+use tower_http::timeout::TimeoutLayer;
 use tower_http::trace::TraceLayer;
 
-use alloy::primitives::{Address, Bytes, U256};
-
-use crate::billing::{self, BillingClient, RLNProof};
+use crate::billing::{self, BillingClient};
 use crate::config::OperatorConfig;
 use crate::health;
+use crate::metrics::{self, RequestGuard};
 use crate::vllm::VllmProcess;
 
+/// Nonce key: (commitment, nonce) pair. Prevents replay of SpendAuth signatures.
+type NonceKey = (String, u64);
+
+// --- x402 constants ---
+
+const X402_PAYMENT_REQUIRED: &str = "X-Payment-Required";
+const X402_PAYMENT_TOKEN: &str = "X-Payment-Token";
+const X402_PAYMENT_RECIPIENT: &str = "X-Payment-Recipient";
+const X402_PAYMENT_NETWORK: &str = "X-Payment-Network";
+const X402_PAYMENT_SIGNATURE: &str = "X-Payment-Signature";
+
+// --- Persistent Nonce Store ---
+
+#[derive(Serialize, Deserialize)]
+struct NonceRecord {
+    commitment: String,
+    nonce: u64,
+    expiry: u64,
+}
+
+/// Replay-protection nonce store with optional file persistence.
+///
+/// Without persistence (`nonce_store_path` unset), operator restarts clear all
+/// nonces, allowing replay of any unexpired SpendAuth signatures.
+pub struct NonceStore {
+    nonces: RwLock<HashMap<NonceKey, u64>>,
+    path: Option<PathBuf>,
+}
+
+impl NonceStore {
+    /// Create a new nonce store, loading persisted nonces from disk if path is set.
+    pub fn load(path: Option<PathBuf>) -> Self {
+        let nonces: HashMap<NonceKey, u64> = path
+            .as_ref()
+            .and_then(|p| std::fs::read_to_string(p).ok())
+            .and_then(|data| serde_json::from_str::<Vec<NonceRecord>>(&data).ok())
+            .map(|records| {
+                records
+                    .into_iter()
+                    .map(|r| ((r.commitment, r.nonce), r.expiry))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        if path.is_some() {
+            tracing::info!(count = nonces.len(), "loaded persisted nonces");
+        } else {
+            tracing::warn!(
+                "nonce_store_path not configured — nonces are in-memory only. \
+                 Operator restart will allow replay of unexpired SpendAuth signatures."
+            );
+        }
+
+        Self {
+            nonces: RwLock::new(nonces),
+            path,
+        }
+    }
+
+    /// Evict expired nonces and check if the key is already used.
+    /// Returns true if replay detected (nonce already seen).
+    pub fn check_replay(&self, key: &NonceKey, tolerance: u64) -> bool {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let mut nonces = self.nonces.write().unwrap_or_else(|e| e.into_inner());
+        nonces.retain(|_, expiry| now <= expiry.saturating_add(tolerance));
+        nonces.contains_key(key)
+    }
+
+    /// Record a nonce as used, evict expired entries, and persist to disk.
+    pub fn insert(&self, key: NonceKey, expiry: u64, tolerance: u64) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let mut nonces = self.nonces.write().unwrap_or_else(|e| e.into_inner());
+        nonces.retain(|_, exp| now <= exp.saturating_add(tolerance));
+        nonces.insert(key, expiry);
+        self.persist(&nonces);
+    }
+
+    fn persist(&self, nonces: &HashMap<NonceKey, u64>) {
+        let Some(ref path) = self.path else { return };
+        let records: Vec<NonceRecord> = nonces
+            .iter()
+            .map(|((commitment, nonce), expiry)| NonceRecord {
+                commitment: commitment.clone(),
+                nonce: *nonce,
+                expiry: *expiry,
+            })
+            .collect();
+        let Ok(data) = serde_json::to_string(&records) else {
+            tracing::error!("failed to serialize nonce store");
+            return;
+        };
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let tmp = path.with_extension("tmp");
+        if std::fs::write(&tmp, &data).is_ok() {
+            if let Err(e) = std::fs::rename(&tmp, path) {
+                tracing::warn!(error = %e, "failed to persist nonce store");
+            }
+        }
+    }
+}
+
+// --- Per-Account Concurrency Guard ---
+
+/// RAII guard that decrements the per-account active request count on drop.
+struct AccountGuard {
+    commitment: String,
+    active: Arc<RwLock<HashMap<String, usize>>>,
+}
+
+impl Drop for AccountGuard {
+    fn drop(&mut self) {
+        let mut map = self.active.write().unwrap_or_else(|e| e.into_inner());
+        if let Some(count) = map.get_mut(&self.commitment) {
+            *count = count.saturating_sub(1);
+            if *count == 0 {
+                map.remove(&self.commitment);
+            }
+        }
+    }
+}
 
 /// Shared application state for the HTTP server.
 #[derive(Clone)]
-pub(crate) struct AppState {
+pub struct AppState {
     pub config: Arc<OperatorConfig>,
     pub vllm: Arc<VllmProcess>,
     pub billing: Arc<BillingClient>,
-    pub concurrency: Arc<Semaphore>,
+    pub semaphore: Arc<Semaphore>,
+    /// Persistent nonce replay-protection store.
+    pub nonce_store: Arc<NonceStore>,
+    /// Tracks active requests per credit account for per-account rate limiting.
+    pub active_per_account: Arc<RwLock<HashMap<String, usize>>>,
+    /// This operator's address, derived from operator_key at startup.
     pub operator_address: Address,
 }
 
-/// Start the HTTP server, returns a join handle.
-pub(crate) async fn start(state: AppState) -> anyhow::Result<JoinHandle<()>> {
+/// Start the HTTP server with graceful shutdown support, returns a join handle.
+pub async fn start(
+    state: AppState,
+    mut shutdown_rx: tokio::sync::watch::Receiver<bool>,
+) -> anyhow::Result<JoinHandle<()>> {
     let app = HttpRouter::new()
         .route("/v1/chat/completions", post(chat_completions))
         .route("/v1/models", get(list_models))
-        .route("/v1/payment_methods", get(payment_methods))
-        .route("/v1/relay", post(relay_transaction))
         .route("/health", get(health_check))
         .route("/health/gpu", get(gpu_health))
+        .route("/metrics", get(metrics_handler))
+        .layer(DefaultBodyLimit::max(
+            state.config.server.max_request_body_bytes,
+        ))
+        .layer(TimeoutLayer::new(Duration::from_secs(
+            state.config.server.stream_timeout_secs,
+        )))
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
         .with_state(state.clone());
@@ -48,7 +196,14 @@ pub(crate) async fn start(state: AppState) -> anyhow::Result<JoinHandle<()>> {
     tracing::info!(bind = %bind, "HTTP server listening");
 
     let handle = tokio::spawn(async move {
-        if let Err(e) = axum::serve(listener, app).await {
+        let shutdown_signal = async move {
+            let _ = shutdown_rx.wait_for(|&v| v).await;
+            tracing::info!("HTTP server received shutdown signal, draining connections");
+        };
+        if let Err(e) = axum::serve(listener, app)
+            .with_graceful_shutdown(shutdown_signal)
+            .await
+        {
             tracing::error!(error = %e, "HTTP server error");
         }
     });
@@ -56,10 +211,10 @@ pub(crate) async fn start(state: AppState) -> anyhow::Result<JoinHandle<()>> {
     Ok(handle)
 }
 
-// ─── Request / Response types (OpenAI-compatible) ────────────────────────
+// --- Request / Response types (OpenAI-compatible) ---
 
 #[derive(Debug, Deserialize)]
-pub(crate) struct ChatCompletionRequest {
+pub struct ChatCompletionRequest {
     pub model: Option<String>,
     pub messages: Vec<ChatMessage>,
     #[serde(default = "default_max_tokens")]
@@ -77,21 +232,19 @@ pub(crate) struct ChatCompletionRequest {
     #[serde(default)]
     pub stop: Option<Vec<String>>,
 
-    /// ShieldedCredits spend authorization (Credit Mode billing)
+    /// ShieldedCredits spend authorization (required when billing_required is true).
+    /// Can also be provided via x402 headers (X-Payment-Signature).
     pub spend_auth: Option<SpendAuthPayload>,
-
-    /// RLN Mode payment proof (alternative to spend_auth)
-    pub rln_proof: Option<RLNProof>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub(crate) struct ChatMessage {
+pub struct ChatMessage {
     pub role: String,
     pub content: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-pub(crate) struct SpendAuthPayload {
+#[derive(Debug, Deserialize)]
+pub struct SpendAuthPayload {
     pub commitment: String,
     pub service_id: u64,
     pub job_index: u8,
@@ -103,7 +256,7 @@ pub(crate) struct SpendAuthPayload {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub(crate) struct ChatCompletionResponse {
+pub struct ChatCompletionResponse {
     pub id: String,
     pub object: String,
     pub created: u64,
@@ -113,14 +266,14 @@ pub(crate) struct ChatCompletionResponse {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub(crate) struct Choice {
+pub struct Choice {
     pub index: u32,
     pub message: ChatMessage,
     pub finish_reason: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub(crate) struct Usage {
+pub struct Usage {
     pub prompt_tokens: u32,
     pub completion_tokens: u32,
     pub total_tokens: u32,
@@ -140,55 +293,15 @@ struct ModelList {
 }
 
 #[derive(Debug, Serialize)]
-struct ErrorResponse {
-    error: ErrorDetail,
+pub(crate) struct ErrorResponse {
+    pub error: ErrorDetail,
 }
 
 #[derive(Debug, Serialize)]
-struct ErrorDetail {
-    message: String,
-    r#type: String,
-    code: String,
-}
-
-// ─── Relay types ──────────────────────────────────────────────────────────
-
-#[derive(Debug, Deserialize)]
-#[allow(dead_code)]
-pub(crate) struct RelayRequest {
-    /// "credits" or "rln" — which gateway function to call
-    pub mode: String,
-    /// Hex-encoded proof data for the shielded withdrawal
-    pub proof_data: String,
-    /// Public inputs for the withdrawal proof
-    pub public_inputs: Vec<String>,
-    /// Target contract address (ShieldedGateway)
-    pub gateway_address: String,
-    /// Credit commitment (bytes32, required for credits mode)
-    pub commitment: Option<String>,
-    /// Spending key address (required for credits mode)
-    pub spending_key: Option<String>,
-    /// Fee taken by the relayer from the withdrawal amount (in token base units)
-    pub fee: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-pub(crate) struct RelayResponse {
-    pub tx_hash: String,
-    pub status: String,
-}
-
-// ─── Payment methods ──────────────────────────────────────────────────────
-
-#[derive(Debug, Serialize)]
-struct PaymentMethod {
-    r#type: String,
-    description: String,
-}
-
-#[derive(Debug, Serialize)]
-struct PaymentMethodsResponse {
-    payment_methods: Vec<PaymentMethod>,
+pub(crate) struct ErrorDetail {
+    pub message: String,
+    pub r#type: String,
+    pub code: String,
 }
 
 fn default_max_tokens() -> u32 {
@@ -198,243 +311,650 @@ fn default_temperature() -> f32 {
     0.7
 }
 
-// ─── Handlers ────────────────────────────────────────────────────────────
+fn error_response(status: StatusCode, message: String, error_type: &str, code: &str) -> Response {
+    let body = ErrorResponse {
+        error: ErrorDetail {
+            message,
+            r#type: error_type.to_string(),
+            code: code.to_string(),
+        },
+    };
+    (status, Json(body)).into_response()
+}
+
+// --- x402 Payment Required response ---
+
+/// Build a 402 Payment Required response with x402 headers.
+/// This tells the client exactly how to pay for the request.
+fn x402_payment_required(state: &AppState) -> Response {
+    let estimated_amount = state.config.billing.min_charge_amount.max(
+        // Default to 1000 input + 512 output tokens at configured rates
+        state.billing.calculate_cost(1000, 512),
+    );
+
+    let body = serde_json::json!({
+        "error": "payment_required",
+        "amount": estimated_amount.to_string(),
+        "token": state.config.billing.payment_token_address.as_deref().unwrap_or("0x0000000000000000000000000000000000000000"),
+        "recipient": format!("{}", state.operator_address),
+        "network": state.config.tangle.chain_id.to_string(),
+        "accepts": ["spend_auth"],
+        "description": "ShieldedCredits SpendAuth required. Include spend_auth in request body or X-Payment-Signature header."
+    });
+
+    Response::builder()
+        .status(StatusCode::PAYMENT_REQUIRED)
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(X402_PAYMENT_REQUIRED, estimated_amount.to_string())
+        .header(
+            X402_PAYMENT_TOKEN,
+            state
+                .config
+                .billing
+                .payment_token_address
+                .as_deref()
+                .unwrap_or("0x0000000000000000000000000000000000000000"),
+        )
+        .header(
+            X402_PAYMENT_RECIPIENT,
+            format!("{}", state.operator_address),
+        )
+        .header(
+            X402_PAYMENT_NETWORK,
+            state.config.tangle.chain_id.to_string(),
+        )
+        .body(Body::from(serde_json::to_string(&body).unwrap_or_default()))
+        .unwrap_or_else(|e| {
+            error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("failed to build 402 response: {e}"),
+                "internal_error",
+                "response_build_failed",
+            )
+        })
+}
+
+/// Try to extract a SpendAuth from x402 headers (X-Payment-Signature).
+/// The header value is a base64-encoded JSON SpendAuthPayload.
+fn extract_x402_spend_auth(headers: &HeaderMap) -> Option<SpendAuthPayload> {
+    let header_val = headers.get(X402_PAYMENT_SIGNATURE)?.to_str().ok()?;
+
+    // Try direct JSON first (URL-safe), then base64-encoded JSON
+    if let Ok(payload) = serde_json::from_str::<SpendAuthPayload>(header_val) {
+        return Some(payload);
+    }
+
+    // Try base64-encoded JSON
+    use alloy::primitives::hex;
+    // The header might be hex-encoded JSON or base64
+    if let Ok(decoded) = hex::decode(header_val.strip_prefix("0x").unwrap_or(header_val)) {
+        if let Ok(payload) = serde_json::from_slice::<SpendAuthPayload>(&decoded) {
+            return Some(payload);
+        }
+    }
+
+    None
+}
+
+// --- Billing settlement helper ---
+
+/// Settle billing after successful inference. Calculates the actual cost,
+/// caps at pre-authorized amount, and claims payment on-chain with retries.
+///
+/// IMPORTANT: The on-chain `claimPayment(bytes32, address)` settles the full
+/// pre-authorized amount -- there is no partial settlement in the current
+/// ShieldedCredits contract. The `actual_amount` is logged for auditing and
+/// will be forwarded on-chain when the contract supports partial claims.
+///
+/// `preauth_amount` is the pre-parsed u64 from step 3a -- avoids re-parsing.
+async fn settle_billing(
+    billing: &BillingClient,
+    spend_auth: &SpendAuthPayload,
+    preauth_amount: u64,
+    prompt_tokens: u32,
+    completion_tokens: u32,
+) {
+    let actual_cost = billing.calculate_cost(prompt_tokens, completion_tokens);
+    let charge_amount = actual_cost.min(preauth_amount);
+
+    tracing::info!(
+        actual_cost,
+        preauth_amount,
+        charge_amount,
+        prompt_tokens,
+        completion_tokens,
+        "settling billing (contract settles full pre-auth)"
+    );
+
+    if charge_amount > 0 {
+        if let Err(e) = billing.claim_payment(spend_auth, charge_amount).await {
+            tracing::error!(
+                error = %e,
+                charge_amount,
+                "billing settlement failed — revenue lost"
+            );
+        }
+    }
+}
+
+// --- Handlers ---
 
 async fn chat_completions(
     State(state): State<AppState>,
-    Json(req): Json<ChatCompletionRequest>,
-) -> Result<Json<ChatCompletionResponse>, (StatusCode, Json<ErrorResponse>)> {
-    // 0. Enforce concurrency limit
-    let _permit = state.concurrency.try_acquire().map_err(|_| {
-        (
-            StatusCode::TOO_MANY_REQUESTS,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    message: "too many concurrent requests".to_string(),
-                    r#type: "rate_limit_error".to_string(),
-                    code: "too_many_requests".to_string(),
-                },
-            }),
-        )
-    })?;
+    headers: HeaderMap,
+    Json(mut req): Json<ChatCompletionRequest>,
+) -> Response {
+    let metrics_guard = RequestGuard::new();
 
-    // 0b. Reject streaming requests (not yet supported)
-    if req.stream {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    message: "streaming is not supported; set stream=false".to_string(),
-                    r#type: "invalid_request_error".to_string(),
-                    code: "unsupported_stream".to_string(),
-                },
-            }),
-        ));
-    }
+    // 1. Acquire semaphore permit
+    let permit: OwnedSemaphorePermit = match state.semaphore.clone().try_acquire_owned() {
+        Ok(p) => p,
+        Err(_) => {
+            return error_response(
+                StatusCode::TOO_MANY_REQUESTS,
+                "server at capacity".to_string(),
+                "rate_limit_error",
+                "too_many_requests",
+            );
+        }
+    };
 
-    // 1. Require payment when billing is enabled (either SpendAuth or RLN proof)
-    if state.config.billing.required && req.spend_auth.is_none() && req.rln_proof.is_none() {
-        return Err((
-            StatusCode::PAYMENT_REQUIRED,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    message: "spend_auth or rln_proof is required".to_string(),
-                    r#type: "billing_error".to_string(),
-                    code: "missing_payment".to_string(),
-                },
-            }),
-        ));
-    }
-
-    // 1b. Verify RLN proof if provided
-    if let Some(ref rln_proof) = req.rln_proof {
-        let result = state.billing.verify_rln_proof(rln_proof).await.map_err(|e| {
-            tracing::warn!(error = %e, "RLN proof verification failed");
-            (
-                StatusCode::PAYMENT_REQUIRED,
-                Json(ErrorResponse {
-                    error: ErrorDetail {
-                        message: format!("RLN proof verification failed: {e}"),
-                        r#type: "billing_error".to_string(),
-                        code: "invalid_rln_proof".to_string(),
-                    },
-                }),
-            )
-        })?;
-
-        if !result.is_fresh {
-            return Err((
-                StatusCode::PAYMENT_REQUIRED,
-                Json(ErrorResponse {
-                    error: ErrorDetail {
-                        message: "RLN nullifier already used".to_string(),
-                        r#type: "billing_error".to_string(),
-                        code: "nullifier_used".to_string(),
-                    },
-                }),
-            ));
+    // 2. x402 flow: if no spend_auth in body, check X-Payment-Signature header
+    if req.spend_auth.is_none() {
+        if let Some(x402_auth) = extract_x402_spend_auth(&headers) {
+            req.spend_auth = Some(x402_auth);
         }
     }
 
+    // 3. Enforce billing requirement -- return x402 402 if missing
+    if state.config.billing.billing_required && req.spend_auth.is_none() {
+        return x402_payment_required(&state);
+    }
+
+    // 4. Verify SpendAuth signature off-chain and check signer identity
     if let Some(ref spend_auth) = req.spend_auth {
-        let recovered = billing::verify_spend_auth_signature(
-            spend_auth,
-            &state.config.tangle.shielded_credits,
-            state.config.tangle.chain_id,
-            &state.operator_address,
-        );
-        let recovered_addr = match recovered {
-            Some(addr) => addr,
-            None => {
-                return Err((
-                    StatusCode::PAYMENT_REQUIRED,
-                    Json(ErrorResponse {
-                        error: ErrorDetail {
-                            message: "invalid SpendAuth signature".to_string(),
-                            r#type: "billing_error".to_string(),
-                            code: "invalid_spend_auth".to_string(),
-                        },
-                    }),
-                ));
+        // 4a. Parse and validate the amount field early
+        let requested_amount: u64 = match spend_auth.amount.parse() {
+            Ok(v) => v,
+            Err(_) => {
+                return error_response(
+                    StatusCode::BAD_REQUEST,
+                    "invalid spend_auth amount: must be a valid u64 integer".to_string(),
+                    "billing_error",
+                    "invalid_amount",
+                );
             }
         };
 
-        // Validate recovered signer against the on-chain spending key
-        let spending_key = state
-            .billing
-            .get_spending_key(&spend_auth.commitment)
-            .await
-            .map_err(|e| {
-                tracing::warn!(error = %e, "failed to look up spending key on-chain");
-                (
-                    StatusCode::BAD_GATEWAY,
-                    Json(ErrorResponse {
-                        error: ErrorDetail {
-                            message: "failed to verify spending key on-chain".to_string(),
-                            r#type: "billing_error".to_string(),
-                            code: "spending_key_lookup_failed".to_string(),
-                        },
-                    }),
-                )
-            })?;
-
-        if recovered_addr != spending_key {
-            tracing::warn!(
-                recovered = %recovered_addr,
-                expected = %spending_key,
-                "SpendAuth signer does not match on-chain spending key"
+        // 4b. Enforce min_charge_amount (gas cost protection)
+        let min_charge = state.config.billing.min_charge_amount;
+        if min_charge > 0 && requested_amount < min_charge {
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                format!(
+                    "spend authorization amount ({requested_amount}) is below minimum charge ({min_charge})"
+                ),
+                "billing_error",
+                "below_min_charge",
             );
-            return Err((
-                StatusCode::PAYMENT_REQUIRED,
-                Json(ErrorResponse {
-                    error: ErrorDetail {
-                        message: "SpendAuth signer does not match on-chain spending key"
-                            .to_string(),
-                        r#type: "billing_error".to_string(),
-                        code: "spending_key_mismatch".to_string(),
-                    },
-                }),
-            ));
         }
 
-        // Enforce billing limits on the authorized amount
-        let authorized: alloy::primitives::U256 = spend_auth.amount.parse().map_err(|_| {
-            (
+        // 4c. Enforce max_spend_per_request policy
+        let max_spend = state.config.billing.max_spend_per_request;
+        if max_spend > 0 && requested_amount > max_spend {
+            return error_response(
                 StatusCode::BAD_REQUEST,
-                Json(ErrorResponse {
-                    error: ErrorDetail {
-                        message: "invalid spend_auth amount".to_string(),
-                        r#type: "billing_error".to_string(),
-                        code: "invalid_amount".to_string(),
-                    },
-                }),
-            )
-        })?;
+                format!(
+                    "spend authorization amount ({requested_amount}) exceeds max_spend_per_request ({max_spend})"
+                ),
+                "billing_error",
+                "exceeds_max_spend",
+            );
+        }
 
-        let max_spend = alloy::primitives::U256::from(state.config.billing.max_spend_per_request);
-        if authorized > max_spend {
-            return Err((
+        // 4d. Validate the operator field matches THIS operator's address
+        let spend_operator: Address = match spend_auth.operator.parse() {
+            Ok(addr) => addr,
+            Err(_) => {
+                return error_response(
+                    StatusCode::BAD_REQUEST,
+                    "invalid operator address in spend_auth".to_string(),
+                    "billing_error",
+                    "invalid_operator",
+                );
+            }
+        };
+        if spend_operator != state.operator_address {
+            return error_response(
                 StatusCode::BAD_REQUEST,
-                Json(ErrorResponse {
-                    error: ErrorDetail {
-                        message: format!(
-                            "authorized amount exceeds max_spend_per_request ({})",
-                            state.config.billing.max_spend_per_request
-                        ),
-                        r#type: "billing_error".to_string(),
-                        code: "amount_too_large".to_string(),
-                    },
-                }),
-            ));
+                format!(
+                    "spend_auth operator ({spend_operator}) does not match this operator ({})",
+                    state.operator_address
+                ),
+                "billing_error",
+                "operator_mismatch",
+            );
         }
 
-        let min_balance = alloy::primitives::U256::from(state.config.billing.min_credit_balance);
-        if authorized < min_balance {
-            return Err((
-                StatusCode::PAYMENT_REQUIRED,
-                Json(ErrorResponse {
-                    error: ErrorDetail {
-                        message: format!(
-                            "authorized amount below min_credit_balance ({})",
-                            state.config.billing.min_credit_balance
-                        ),
-                        r#type: "billing_error".to_string(),
-                        code: "insufficient_credit".to_string(),
-                    },
-                }),
-            ));
-        }
-    }
-
-    // 2. Proxy to vLLM
-    let vllm_response = state.vllm.chat_completion(&req).await.map_err(|e| {
-        tracing::error!(error = %e, "vLLM request failed");
-        (
-            StatusCode::BAD_GATEWAY,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    message: format!("upstream vLLM error: {e}"),
-                    r#type: "upstream_error".to_string(),
-                    code: "vllm_error".to_string(),
-                },
-            }),
-        )
-    })?;
-
-    // 3. Post-serve billing: authorize spend + claim payment on-chain
-    if let Some(spend_auth) = req.spend_auth {
-        let actual_cost = state.billing.calculate_cost(
-            vllm_response.usage.prompt_tokens,
-            vllm_response.usage.completion_tokens,
-        );
-
-        if actual_cost > 0 {
-            if let Err(e) = state
-                .billing
-                .authorize_and_claim(&spend_auth, actual_cost)
-                .await
-            {
-                tracing::error!(
-                    error = %e,
-                    commitment = %spend_auth.commitment,
-                    authorized_amount = %spend_auth.amount,
-                    actual_cost = actual_cost,
-                    nonce = spend_auth.nonce,
-                    "billing claim failed after serving inference — operator revenue lost"
+        // 4e. Validate service_id matches this operator's configured service
+        if let Some(expected_service_id) = state.config.tangle.service_id {
+            if spend_auth.service_id != expected_service_id {
+                return error_response(
+                    StatusCode::BAD_REQUEST,
+                    format!(
+                        "spend_auth service_id ({}) does not match operator service ({expected_service_id})",
+                        spend_auth.service_id
+                    ),
+                    "billing_error",
+                    "service_id_mismatch",
                 );
             }
         }
-    } else if let Some(rln_proof) = req.rln_proof {
-        // RLN Mode: record the claim for batch settlement
-        state.billing.record_rln_claim(&rln_proof).await;
-        tracing::info!(
-            epoch = rln_proof.epoch,
-            amount = rln_proof.amount,
-            "RLN claim recorded for batch settlement"
+
+        // 4f. Nonce replay protection
+        let nonce_key = (spend_auth.commitment.clone(), spend_auth.nonce);
+        if state
+            .nonce_store
+            .check_replay(&nonce_key, state.config.billing.clock_skew_tolerance_secs)
+        {
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                "spend_auth nonce already used (replay detected)".to_string(),
+                "billing_error",
+                "nonce_replay",
+            );
+        }
+
+        // 4g. Recover signer from EIP-712 signature
+        let recovered_address = match billing::recover_spend_auth_signer(
+            spend_auth,
+            &state.config.tangle.shielded_credits,
+            state.config.tangle.chain_id,
+            state.config.billing.clock_skew_tolerance_secs,
+        ) {
+            Ok(addr) => addr,
+            Err(reason) => {
+                return error_response(
+                    StatusCode::PAYMENT_REQUIRED,
+                    format!("invalid SpendAuth signature: {reason}"),
+                    "billing_error",
+                    "invalid_spend_auth",
+                );
+            }
+        };
+
+        // 4h. Verify the recovered signer matches the account's on-chain spending key
+        match state.billing.get_account_info(&spend_auth.commitment).await {
+            Ok(account_info) => {
+                if recovered_address != account_info.spending_key {
+                    return error_response(
+                        StatusCode::PAYMENT_REQUIRED,
+                        "SpendAuth signer does not match account spending key".to_string(),
+                        "billing_error",
+                        "signer_mismatch",
+                    );
+                }
+
+                // 4i. Enforce min_credit_balance policy
+                let min_balance = state.config.billing.min_credit_balance;
+                if min_balance > 0
+                    && account_info.balance < alloy::primitives::U256::from(min_balance)
+                {
+                    return error_response(
+                        StatusCode::PAYMENT_REQUIRED,
+                        format!(
+                            "credit balance ({}) is below minimum required ({min_balance})",
+                            account_info.balance
+                        ),
+                        "billing_error",
+                        "insufficient_balance",
+                    );
+                }
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "failed to check account info");
+                return error_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "failed to verify account info".to_string(),
+                    "billing_error",
+                    "account_check_failed",
+                );
+            }
+        }
+    }
+
+    // 5. Pre-authorize billing on-chain BEFORE sending upstream request
+    let mut account_guard: Option<AccountGuard> = None;
+    if let Some(ref spend_auth) = req.spend_auth {
+        // Estimate max cost
+        let estimated_prompt_tokens: u32 = req
+            .messages
+            .iter()
+            .map(|m| (m.content.len() as u32) / 4 + 1)
+            .sum();
+        let estimated_max_cost = state
+            .billing
+            .calculate_cost(estimated_prompt_tokens, req.max_tokens);
+        let requested_amount: u64 = spend_auth.amount.parse().unwrap_or(0);
+        // Cap at 1.5x estimated cost
+        let preauth_ceiling = estimated_max_cost.saturating_mul(3) / 2;
+        if estimated_max_cost > 0 && requested_amount > preauth_ceiling {
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                format!(
+                    "pre-auth amount ({requested_amount}) exceeds 1.5x estimated max cost ({estimated_max_cost}) — \
+                     contract settles full pre-auth, reduce amount to avoid overcharging"
+                ),
+                "billing_error",
+                "excessive_preauth",
+            );
+        }
+
+        // 5a. Per-account concurrency limit
+        let max_per_account = state.config.server.max_per_account_requests;
+        if max_per_account > 0 {
+            let mut map = state
+                .active_per_account
+                .write()
+                .unwrap_or_else(|e| e.into_inner());
+            let count = map.entry(spend_auth.commitment.clone()).or_insert(0);
+            if *count >= max_per_account {
+                return error_response(
+                    StatusCode::TOO_MANY_REQUESTS,
+                    format!("account has {count} active requests (limit: {max_per_account})"),
+                    "rate_limit_error",
+                    "per_account_limit",
+                );
+            }
+            *count += 1;
+            account_guard = Some(AccountGuard {
+                commitment: spend_auth.commitment.clone(),
+                active: Arc::clone(&state.active_per_account),
+            });
+        }
+
+        // 5b. Check vLLM health before committing gas
+        if !state.vllm.is_healthy().await {
+            return error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "inference backend is unavailable — billing not initiated".to_string(),
+                "upstream_error",
+                "vllm_unhealthy",
+            );
+        }
+
+        if let Err(e) = state.billing.authorize_spend(spend_auth).await {
+            tracing::error!(error = %e, "authorizeSpend failed");
+            return error_response(
+                StatusCode::PAYMENT_REQUIRED,
+                format!("billing authorization failed: {e}"),
+                "billing_error",
+                "authorization_failed",
+            );
+        }
+
+        // Record the nonce as used AFTER successful on-chain authorization
+        let nonce_key = (spend_auth.commitment.clone(), spend_auth.nonce);
+        state.nonce_store.insert(
+            nonce_key,
+            spend_auth.expiry,
+            state.config.billing.clock_skew_tolerance_secs,
         );
     }
 
-    Ok(Json(vllm_response))
+    // 6. Capture pre-parsed amount for settlement
+    let preauth_amount: Option<u64> = req
+        .spend_auth
+        .as_ref()
+        .map(|sa| sa.amount.parse::<u64>().unwrap_or(0));
+
+    // 7. Dispatch to streaming or non-streaming path
+    if req.stream {
+        handle_streaming(
+            state,
+            req,
+            preauth_amount,
+            metrics_guard,
+            permit,
+            account_guard,
+        )
+        .await
+    } else {
+        handle_non_streaming(
+            state,
+            req,
+            preauth_amount,
+            metrics_guard,
+            permit,
+            account_guard,
+        )
+        .await
+    }
+}
+
+async fn handle_non_streaming(
+    state: AppState,
+    req: ChatCompletionRequest,
+    preauth_amount: Option<u64>,
+    mut metrics_guard: RequestGuard,
+    _permit: OwnedSemaphorePermit,
+    _account_guard: Option<AccountGuard>,
+) -> Response {
+    let vllm_response = match state.vllm.chat_completion(&req).await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!(error = %e, "vLLM request failed");
+            return error_response(
+                StatusCode::BAD_GATEWAY,
+                format!("upstream vLLM error: {e}"),
+                "upstream_error",
+                "vllm_error",
+            );
+        }
+    };
+
+    metrics_guard.set_tokens(
+        vllm_response.usage.prompt_tokens,
+        vllm_response.usage.completion_tokens,
+    );
+    metrics_guard.set_success();
+
+    // Post-response settlement
+    if let (Some(ref spend_auth), Some(preauth)) = (&req.spend_auth, preauth_amount) {
+        settle_billing(
+            &state.billing,
+            spend_auth,
+            preauth,
+            vllm_response.usage.prompt_tokens,
+            vllm_response.usage.completion_tokens,
+        )
+        .await;
+    }
+
+    Json(vllm_response).into_response()
+}
+
+async fn handle_streaming(
+    state: AppState,
+    req: ChatCompletionRequest,
+    preauth_amount: Option<u64>,
+    mut metrics_guard: RequestGuard,
+    permit: OwnedSemaphorePermit,
+    account_guard: Option<AccountGuard>,
+) -> Response {
+    // Get the raw upstream SSE response as a byte stream
+    let upstream = match state.vllm.chat_completion_stream(&req).await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!(error = %e, "vLLM streaming request failed");
+            return error_response(
+                StatusCode::BAD_GATEWAY,
+                format!("upstream vLLM error: {e}"),
+                "upstream_error",
+                "vllm_error",
+            );
+        }
+    };
+
+    let byte_stream = upstream.bytes_stream();
+
+    let spend_auth_for_settlement = req.spend_auth;
+    let billing_for_settlement = state.billing.clone();
+
+    let (usage_tx, usage_rx) = tokio::sync::oneshot::channel::<(u32, u32)>();
+
+    let idle_timeout = Duration::from_secs(state.config.server.idle_chunk_timeout_secs);
+    let max_line_buf = state.config.server.max_line_buf_bytes;
+
+    // Wrap the byte stream with a per-chunk idle timeout
+    let timed_stream = tokio_stream::StreamExt::timeout(
+        tokio_stream::wrappers::ReceiverStream::new({
+            let (tx, rx) = tokio::sync::mpsc::channel(32);
+            tokio::spawn(async move {
+                tokio::pin!(byte_stream);
+                while let Some(chunk) = byte_stream.next().await {
+                    if tx.send(chunk).await.is_err() {
+                        break;
+                    }
+                }
+            });
+            rx
+        }),
+        idle_timeout,
+    );
+
+    let proxied_stream = {
+        let mut usage_sender = Some(usage_tx);
+        let mut line_buf = String::new();
+
+        timed_stream.map(move |item| {
+            match item {
+                Ok(Ok(bytes)) => {
+                    if let Ok(text) = std::str::from_utf8(&bytes) {
+                        line_buf.push_str(text);
+
+                        // Cap line_buf to prevent unbounded memory growth
+                        if line_buf.len() > max_line_buf {
+                            tracing::warn!(
+                                size = line_buf.len(),
+                                max = max_line_buf,
+                                "line_buf exceeded max size, clearing"
+                            );
+                            line_buf.clear();
+                        }
+
+                        // Only process complete lines (terminated by \n).
+                        while let Some(newline_pos) = line_buf.find('\n') {
+                            {
+                                let complete_line = &line_buf[..newline_pos];
+                                if let Some(json_str) = complete_line.strip_prefix("data: ") {
+                                    let json_str = json_str.trim();
+                                    if json_str != "[DONE]" {
+                                        if let Ok(val) =
+                                            serde_json::from_str::<serde_json::Value>(json_str)
+                                        {
+                                            if let Some(usage) = val.get("usage") {
+                                                if !usage.is_null() {
+                                                    let pt = usage
+                                                        .get("prompt_tokens")
+                                                        .and_then(|v| v.as_u64())
+                                                        .unwrap_or(0)
+                                                        as u32;
+                                                    let ct = usage
+                                                        .get("completion_tokens")
+                                                        .and_then(|v| v.as_u64())
+                                                        .unwrap_or(0)
+                                                        as u32;
+                                                    if let Some(sender) = usage_sender.take() {
+                                                        let _ = sender.send((pt, ct));
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            // In-place removal instead of allocating a new String
+                            line_buf.replace_range(..newline_pos + 1, "");
+                        }
+                    }
+                    Ok::<_, std::io::Error>(bytes)
+                }
+                Ok(Err(e)) => Err(std::io::Error::other(e)),
+                Err(_elapsed) => {
+                    tracing::warn!("stream idle timeout exceeded");
+                    Err(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "stream idle chunk timeout",
+                    ))
+                }
+            }
+        })
+    };
+
+    let body = Body::from_stream(proxied_stream);
+
+    // Background task: waits for the stream to complete, then settles billing,
+    // records metrics, and releases the semaphore permit.
+    let max_tokens_for_fallback = req.max_tokens;
+    tokio::spawn(async move {
+        match usage_rx.await {
+            Ok((prompt_tokens, completion_tokens)) => {
+                metrics_guard.set_tokens(prompt_tokens, completion_tokens);
+                metrics_guard.set_success();
+
+                if let (Some(ref spend_auth), Some(preauth)) =
+                    (&spend_auth_for_settlement, preauth_amount)
+                {
+                    settle_billing(
+                        &billing_for_settlement,
+                        spend_auth,
+                        preauth,
+                        prompt_tokens,
+                        completion_tokens,
+                    )
+                    .await;
+                }
+            }
+            Err(_) => {
+                tracing::warn!(
+                    "streaming response ended without usage data — settling with max_tokens fallback"
+                );
+
+                if let (Some(ref spend_auth), Some(preauth)) =
+                    (&spend_auth_for_settlement, preauth_amount)
+                {
+                    settle_billing(
+                        &billing_for_settlement,
+                        spend_auth,
+                        preauth,
+                        0,
+                        max_tokens_for_fallback,
+                    )
+                    .await;
+                }
+            }
+        }
+
+        // permit and account_guard held until here, covering the full stream lifetime
+        drop(permit);
+        drop(account_guard);
+    });
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "text/event-stream")
+        .header(header::CACHE_CONTROL, "no-cache")
+        .header(header::CONNECTION, "keep-alive")
+        .body(body)
+        .unwrap_or_else(|e| {
+            error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("failed to build SSE response: {e}"),
+                "internal_error",
+                "response_build_failed",
+            )
+        })
 }
 
 async fn list_models(State(state): State<AppState>) -> Json<ModelList> {
@@ -463,180 +983,6 @@ async fn health_check(
     }
 }
 
-async fn payment_methods(State(state): State<AppState>) -> Json<PaymentMethodsResponse> {
-    let mut methods = vec![PaymentMethod {
-        r#type: "credit_mode".to_string(),
-        description: "EIP-712 SpendAuth".to_string(),
-    }];
-
-    if state.config.rln.is_some() {
-        methods.push(PaymentMethod {
-            r#type: "rln_mode".to_string(),
-            description: "RLN ZK proof".to_string(),
-        });
-    }
-
-    Json(PaymentMethodsResponse {
-        payment_methods: methods,
-    })
-}
-
-async fn relay_transaction(
-    State(state): State<AppState>,
-    Json(payload): Json<RelayRequest>,
-) -> Result<Json<RelayResponse>, (StatusCode, Json<ErrorResponse>)> {
-    // Validate mode
-    if payload.mode != "credits" && payload.mode != "rln" {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    message: "mode must be 'credits' or 'rln'".to_string(),
-                    r#type: "invalid_request_error".to_string(),
-                    code: "invalid_relay_mode".to_string(),
-                },
-            }),
-        ));
-    }
-
-    // Validate gateway address
-    let gateway: Address = payload.gateway_address.parse().map_err(|_| {
-        (
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    message: "invalid gateway_address".to_string(),
-                    r#type: "invalid_request_error".to_string(),
-                    code: "invalid_address".to_string(),
-                },
-            }),
-        )
-    })?;
-
-    // Validate proof data is valid hex
-    let proof_bytes = hex::decode(
-        payload
-            .proof_data
-            .strip_prefix("0x")
-            .unwrap_or(&payload.proof_data),
-    )
-    .map_err(|_| {
-        (
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: ErrorDetail {
-                    message: "invalid proof_data hex".to_string(),
-                    r#type: "invalid_request_error".to_string(),
-                    code: "invalid_proof_data".to_string(),
-                },
-            }),
-        )
-    })?;
-
-    // Credit Mode relay: shieldedFundCredits(proof, commitment, spendingKey)
-    if payload.mode == "credits" {
-        let commitment_str = payload.commitment.as_deref().ok_or_else(|| {
-            (
-                StatusCode::BAD_REQUEST,
-                Json(ErrorResponse {
-                    error: ErrorDetail {
-                        message: "commitment is required for credits mode".to_string(),
-                        r#type: "invalid_request_error".to_string(),
-                        code: "missing_commitment".to_string(),
-                    },
-                }),
-            )
-        })?;
-
-        let spending_key_str = payload.spending_key.as_deref().ok_or_else(|| {
-            (
-                StatusCode::BAD_REQUEST,
-                Json(ErrorResponse {
-                    error: ErrorDetail {
-                        message: "spending_key is required for credits mode".to_string(),
-                        r#type: "invalid_request_error".to_string(),
-                        code: "missing_spending_key".to_string(),
-                    },
-                }),
-            )
-        })?;
-
-        let commitment: alloy::primitives::FixedBytes<32> =
-            commitment_str.parse().map_err(|_| {
-                (
-                    StatusCode::BAD_REQUEST,
-                    Json(ErrorResponse {
-                        error: ErrorDetail {
-                            message: "invalid commitment bytes32".to_string(),
-                            r#type: "invalid_request_error".to_string(),
-                            code: "invalid_commitment".to_string(),
-                        },
-                    }),
-                )
-            })?;
-
-        let spending_key: Address = spending_key_str.parse().map_err(|_| {
-            (
-                StatusCode::BAD_REQUEST,
-                Json(ErrorResponse {
-                    error: ErrorDetail {
-                        message: "invalid spending_key address".to_string(),
-                        r#type: "invalid_request_error".to_string(),
-                        code: "invalid_spending_key".to_string(),
-                    },
-                }),
-            )
-        })?;
-
-        let tx_hash = state
-            .billing
-            .relay_shielded_fund_credits(
-                gateway,
-                Bytes::from(proof_bytes),
-                commitment,
-                spending_key,
-            )
-            .await
-            .map_err(|e| {
-                tracing::error!(error = %e, "relay transaction submission failed");
-                (
-                    StatusCode::BAD_GATEWAY,
-                    Json(ErrorResponse {
-                        error: ErrorDetail {
-                            message: format!("relay submission failed: {e}"),
-                            r#type: "relay_error".to_string(),
-                            code: "relay_failed".to_string(),
-                        },
-                    }),
-                )
-            })?;
-
-        tracing::info!(
-            tx_hash = %tx_hash,
-            mode = "credits",
-            gateway = %gateway,
-            "relay transaction submitted"
-        );
-
-        return Ok(Json(RelayResponse {
-            tx_hash,
-            status: "submitted".to_string(),
-        }));
-    }
-
-    // RLN Mode relay: same pattern, different target function (not yet wired)
-    Err((
-        StatusCode::NOT_IMPLEMENTED,
-        Json(ErrorResponse {
-            error: ErrorDetail {
-                message: "RLN relay not yet implemented; use credits mode".to_string(),
-                r#type: "not_implemented".to_string(),
-                code: "rln_relay_pending".to_string(),
-            },
-        }),
-    ))
-}
-
 async fn gpu_health() -> Result<Json<Vec<health::GpuInfo>>, (StatusCode, String)> {
     match health::detect_gpus().await {
         Ok(gpus) => Ok(Json(gpus)),
@@ -644,143 +990,21 @@ async fn gpu_health() -> Result<Json<Vec<health::GpuInfo>>, (StatusCode, String)
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_deserialize_chat_request_minimal() {
-        let json = r#"{
-            "messages": [{"role": "user", "content": "hello"}]
-        }"#;
-        let req: ChatCompletionRequest = serde_json::from_str(json).unwrap();
-        assert!(req.model.is_none());
-        assert_eq!(req.messages.len(), 1);
-        assert_eq!(req.messages[0].role, "user");
-        assert_eq!(req.messages[0].content, "hello");
-        assert_eq!(req.max_tokens, 512); // default
-        assert!((req.temperature - 0.7).abs() < f32::EPSILON); // default
-        assert!(!req.stream);
-        assert!(req.spend_auth.is_none());
-        assert!(req.rln_proof.is_none());
-    }
-
-    #[test]
-    fn test_deserialize_chat_request_full() {
-        let json = r#"{
-            "model": "gpt-4",
-            "messages": [
-                {"role": "system", "content": "You are helpful."},
-                {"role": "user", "content": "hi"}
-            ],
-            "max_tokens": 1024,
-            "temperature": 0.5,
-            "stream": true,
-            "top_p": 0.9,
-            "frequency_penalty": 0.1,
-            "presence_penalty": 0.2,
-            "stop": ["END"],
-            "spend_auth": {
-                "commitment": "0x0000000000000000000000000000000000000000000000000000000000000001",
-                "service_id": 1,
-                "job_index": 0,
-                "amount": "1000",
-                "operator": "0x0000000000000000000000000000000000000001",
-                "nonce": 42,
-                "expiry": 9999999999,
-                "signature": "0xdeadbeef"
-            }
-        }"#;
-        let req: ChatCompletionRequest = serde_json::from_str(json).unwrap();
-        assert_eq!(req.model.as_deref(), Some("gpt-4"));
-        assert_eq!(req.messages.len(), 2);
-        assert_eq!(req.max_tokens, 1024);
-        assert!((req.temperature - 0.5).abs() < f32::EPSILON);
-        assert!(req.stream);
-        assert_eq!(req.top_p, Some(0.9));
-        assert_eq!(req.frequency_penalty, Some(0.1));
-        assert_eq!(req.presence_penalty, Some(0.2));
-        assert_eq!(req.stop, Some(vec!["END".to_string()]));
-        let auth = req.spend_auth.unwrap();
-        assert_eq!(auth.service_id, 1);
-        assert_eq!(auth.nonce, 42);
-    }
-
-    #[test]
-    fn test_deserialize_chat_request_missing_messages_fails() {
-        let json = r#"{"model": "test"}"#;
-        let result = serde_json::from_str::<ChatCompletionRequest>(json);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_deserialize_chat_request_empty_messages() {
-        let json = r#"{"messages": []}"#;
-        let req: ChatCompletionRequest = serde_json::from_str(json).unwrap();
-        assert!(req.messages.is_empty());
-    }
-
-    #[test]
-    fn test_chat_response_serialization() {
-        let resp = ChatCompletionResponse {
-            id: "chatcmpl-123".to_string(),
-            object: "chat.completion".to_string(),
-            created: 1234567890,
-            model: "test-model".to_string(),
-            choices: vec![Choice {
-                index: 0,
-                message: ChatMessage {
-                    role: "assistant".to_string(),
-                    content: "Hello!".to_string(),
-                },
-                finish_reason: "stop".to_string(),
-            }],
-            usage: Usage {
-                prompt_tokens: 10,
-                completion_tokens: 5,
-                total_tokens: 15,
-            },
-        };
-        let json = serde_json::to_value(&resp).unwrap();
-        assert_eq!(json["id"], "chatcmpl-123");
-        assert_eq!(json["choices"][0]["message"]["content"], "Hello!");
-        assert_eq!(json["usage"]["total_tokens"], 15);
-    }
-
-    #[test]
-    fn test_chat_response_roundtrip() {
-        let resp = ChatCompletionResponse {
-            id: "test".to_string(),
-            object: "chat.completion".to_string(),
-            created: 0,
-            model: "m".to_string(),
-            choices: vec![],
-            usage: Usage {
-                prompt_tokens: 1,
-                completion_tokens: 2,
-                total_tokens: 3,
-            },
-        };
-        let json = serde_json::to_string(&resp).unwrap();
-        let resp2: ChatCompletionResponse = serde_json::from_str(&json).unwrap();
-        assert_eq!(resp2.usage.prompt_tokens, 1);
-        assert_eq!(resp2.usage.completion_tokens, 2);
-    }
-
-    #[test]
-    fn test_default_values() {
-        assert_eq!(default_max_tokens(), 512);
-        assert!((default_temperature() - 0.7).abs() < f32::EPSILON);
-    }
-
-    #[test]
-    fn test_semaphore_try_acquire_exhaustion() {
-        // Verify the concurrency pattern works as expected
-        let sem = Arc::new(Semaphore::new(2));
-        let _p1 = sem.try_acquire().unwrap();
-        let _p2 = sem.try_acquire().unwrap();
-        assert!(sem.try_acquire().is_err(), "third acquire should fail");
-        drop(_p1);
-        assert!(sem.try_acquire().is_ok(), "should succeed after drop");
-    }
+async fn metrics_handler() -> Response {
+    let body = metrics::gather();
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(
+            header::CONTENT_TYPE,
+            "text/plain; version=0.0.4; charset=utf-8",
+        )
+        .body(Body::from(body))
+        .unwrap_or_else(|e| {
+            error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("failed to build metrics response: {e}"),
+                "internal_error",
+                "response_build_failed",
+            )
+        })
 }

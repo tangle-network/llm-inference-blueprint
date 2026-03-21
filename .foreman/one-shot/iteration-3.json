@@ -1,0 +1,73 @@
+{
+  "iteration": 3,
+  "workerExitCode": 0,
+  "checks": [
+    {
+      "cmd": "cd /home/drew/code/vllm-inference-blueprint && cargo fmt --all -- --check",
+      "pass": true
+    },
+    {
+      "cmd": "cd /home/drew/code/vllm-inference-blueprint && cargo clippy --workspace -- -D warnings",
+      "pass": true
+    },
+    {
+      "cmd": "cd /home/drew/code/vllm-inference-blueprint && cargo test --workspace",
+      "pass": true
+    }
+  ],
+  "judges": [
+    {
+      "name": "billing_security",
+      "score": 6,
+      "findings": [
+        "CRITICAL: claimPayment(bytes32, address) settles the FULL pre-authorized amount — there is no amount parameter. The settle_billing function computes actual_cost and charge_amount but these are logging-only; users are always charged the full pre-auth. The 3x estimated-max-cost cap (line 429) mitigates but does not fix systematic overcharging. This is a contract design limitation, not a code bug, but it means real money is lost by users on every request where actual < preauth.",
+        "HIGH: Nonce replay map (used_nonces) is in-memory only — operator restart clears it, allowing replay of any unexpired SpendAuth signatures. An attacker who captures a valid SpendAuth with future expiry can replay it after operator restart to trigger duplicate authorizeSpend calls. Needs persistent storage (e.g., on-chain nonce check or local DB).",
+        "MEDIUM: No service_id validation — spend_auth.service_id is passed through to authorizeSpend but never checked against the operator's configured tangle.service_id. A SpendAuth signed for a different service could be submitted here. The on-chain contract may reject it, but the operator wastes gas on the failed tx after already doing signature verification work.",
+        "MEDIUM: authorize_spend succeeds but vLLM then fails → funds are locked until SpendAuth expiry with no refund path. Documented (lines 494-498) but still a financial risk. The pre-vLLM health check (line 443) mitigates but doesn't eliminate race conditions where vLLM goes down between health check and actual inference.",
+        "LOW: Line 472 uses .expect() in a request handler path — technically safe because amount was validated in step 3a, but violates the project's own rule against .expect() in production error paths. Should use .unwrap_or(0) or propagate the error.",
+        "LOW: No per-account rate limiting — a single credit account (commitment) can submit unlimited concurrent requests as long as each has a unique nonce and valid signature. The global semaphore limits total concurrency but doesn't prevent a single account from monopolizing all slots.",
+        "INFO: Gas cost protection is well-implemented — max_gas_price_gwei cap, min_charge_amount floor, and pre-tx gas price checks on both authorizeSpend and claimPayment with per-retry rechecks.",
+        "INFO: Spend auth signer verification against on-chain spending key (the prior audit's auth bypass) is correctly fixed at lines 379-415.",
+        "INFO: max_spend_per_request is correctly enforced at lines 299-309."
+      ]
+    },
+    {
+      "name": "reliability",
+      "score": 7,
+      "findings": [
+        "GOOD: stdout/stderr properly drained via tokio BufReader async line readers (vllm.rs:73-90) — no pipe deadlock risk",
+        "GOOD: Crash recovery implemented via watchdog loop (lib.rs:235-283) with exponential backoff (5s → 120s cap) and respawn",
+        "GOOD: BackgroundService::start() sends Ok(()) on readiness channel only after vLLM healthy (lib.rs:221)",
+        "GOOD: All critical requirements from prior audit addressed — TangleProducer/Consumer wired (main.rs:64-78), signer verified against spending key (server.rs:379-414), no production .expect()/.unwrap()",
+        "GOOD: Per-chunk idle timeout on streaming (server.rs:563-577), body size limit (server.rs:56-58), overall request timeout (server.rs:59-61)",
+        "GOOD: Semaphore concurrency limiting with try_acquire (server.rs:246) — fails fast with 429",
+        "GOOD: Nonce replay protection with expiry-based eviction (server.rs:340-358)",
+        "MINOR: Watchdog respawn creates new VllmProcess stored in _live_handle (lib.rs:267) but AppState.vllm still holds Arc to original — works because proxy goes through host:port not process handle, but is_healthy() on old handle also resolves via HTTP so it's functional. Fragile coupling.",
+        "MINOR: server.rs:472 has .expect('amount validated in step 3a') — safe because parse was validated at line 273, but a refactor could break this invariant. Storing parsed value from step 3a would be more robust.",
+        "MINOR: No per-client rate limiting — single client can exhaust all semaphore permits, starving others. Only total concurrency is bounded.",
+        "MINOR: CorsLayer::permissive() (server.rs:62) allows any origin. Intentional for public API but worth explicit documentation.",
+        "MINOR: used_nonces HashMap (server.rs:40) has no size cap — within a single expiry window, attacker with valid credentials could grow memory. Low risk since each request requires on-chain authorization (gas cost makes this expensive).",
+        "INFO: Contract settles full pre-auth amount, not actual cost (documented at server.rs:419-421, billing.rs:172-178). 3x guard at server.rs:429 mitigates overcharging but doesn't eliminate it.",
+        "INFO: metrics.rs .expect() calls (lines 19, 23, 36, 39, etc.) are in LazyLock initializers on hardcoded metric definitions — infallible in practice, acceptable."
+      ]
+    },
+    {
+      "name": "code_quality",
+      "score": 7,
+      "findings": [
+        "Unused dependencies: thiserror and dotenvy are in Cargo.toml but never used in any source file. Dead weight that inflates compile time.",
+        "Provider rebuilt per billing call: billing.rs creates a fresh ProviderBuilder::new().connect_http() for every authorize_spend, claim_payment, get_account_info, and check_gas_price call instead of storing a reusable provider. Under load this creates unnecessary TCP connections.",
+        "Double-parsing of spend_auth.amount: parsed as u64 at server.rs:273 (step 3a) and again at server.rs:428 (step 4) with unwrap_or(0). The second parse should reuse the validated value from step 3a rather than re-parsing and silently defaulting.",
+        "No model field validation: ChatCompletionRequest.model is passed through to vLLM via build_vllm_body without validation against the configured model. An attacker could probe for other models loaded on the vLLM instance. Should enforce config.vllm.model or a whitelist.",
+        "SSE line parsing logic duplicated: the chunk-boundary-aware line_buf parsing in server.rs:583-645 is complex and inlined in a closure. It should be extracted into a testable function rather than having tests duplicate the same logic verbatim (server_tests.rs:264-297).",
+        "CorsLayer::permissive() in production: server.rs:62 allows all origins, methods, and headers. For a billing-enabled inference endpoint this should be tightened or at minimum be configurable.",
+        "OnceLock for VLLM_ENDPOINT prevents config update on respawn: lib.rs:77 uses OnceLock::set which silently drops on second call. After the watchdog respawns vLLM, the on-chain job handler still uses the original endpoint. This works because host:port stays the same, but it's fragile — if a config reload changes the port, on-chain jobs would silently fail.",
+        "claim_payment cannot settle actual cost (contract limitation): requirement #6 says 'billing claim_payment MUST use actual token cost, not pre-auth amount' but the ShieldedCredits contract's claimPayment(bytes32,address) always settles the full pre-auth. The code correctly calculates and logs actual cost, and the 3x preauth cap mitigates overcharging, but partial settlement is structurally impossible without a contract upgrade. Well-documented but the requirement is unmet at the contract level.",
+        "server.rs:472 uses .expect() inside a map closure on the billing path. If future refactoring changes when spend_auth.amount is validated, this becomes a production panic. Should propagate the error or use the preauth_amount from step 3a directly.",
+        "No per-identity rate limiting: the semaphore limits global concurrency but a single client (commitment) can monopolize all slots. A per-commitment or per-IP rate limit would prevent abuse."
+      ]
+    }
+  ],
+  "avgScore": 6.666666666666667,
+  "threshold": 8
+}

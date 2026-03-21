@@ -1,14 +1,15 @@
 pub mod billing;
 pub mod config;
 pub mod health;
+pub mod metrics;
 pub mod vllm;
 
-mod server;
+pub mod server;
 
-use std::sync::{Arc, OnceLock};
+use std::collections::HashMap;
+use std::sync::{Arc, OnceLock, RwLock};
+use std::time::Duration;
 
-use alloy::primitives::Address;
-use alloy::signers::local::PrivateKeySigner;
 use alloy_sol_types::sol;
 use blueprint_sdk::macros::debug_job;
 use blueprint_sdk::router::Router;
@@ -17,35 +18,12 @@ use blueprint_sdk::runner::BackgroundService;
 use blueprint_sdk::tangle::extract::{TangleArg, TangleResult};
 use blueprint_sdk::tangle::layers::TangleLayer;
 use blueprint_sdk::Job;
-use tokio::sync::oneshot;
+use tokio::sync::{oneshot, Semaphore};
 
 use crate::config::OperatorConfig;
 use crate::vllm::VllmProcess;
 
-/// vLLM base URL set once during startup, read by the on-chain job handler.
-static VLLM_BASE_URL: OnceLock<String> = OnceLock::new();
-
-/// Model name set once during startup, read by the on-chain job handler.
-static VLLM_MODEL_NAME: OnceLock<String> = OnceLock::new();
-
-/// Shared HTTP client for on-chain job handler, initialized once during startup.
-static VLLM_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
-
-/// Signaled after vLLM passes its readiness health check. Prevents the job
-/// handler from sending requests before the subprocess is ready.
-static VLLM_READY: OnceLock<()> = OnceLock::new();
-
-/// Initialize the inference handler statics for testing. Call this before
-/// submitting jobs when running without the full InferenceServer background
-/// service (e.g. in BlueprintHarness tests with a mock vLLM endpoint).
-pub fn init_for_testing(base_url: &str, model: &str) {
-    let _ = VLLM_BASE_URL.set(base_url.to_string());
-    let _ = VLLM_MODEL_NAME.set(model.to_string());
-    let _ = VLLM_CLIENT.set(reqwest::Client::new());
-    let _ = VLLM_READY.set(());
-}
-
-// ─── ABI types for on-chain job encoding ─────────────────────────────────
+// --- ABI types for on-chain job encoding ---
 
 sol! {
     #[derive(Debug, serde::Serialize, serde::Deserialize)]
@@ -66,112 +44,98 @@ sol! {
     }
 }
 
-// ─── Job IDs ─────────────────────────────────────────────────────────────
+// --- Job IDs ---
 
 pub const INFERENCE_JOB: u8 = 0;
 
-// ─── Router ──────────────────────────────────────────────────────────────
+// --- Shared state for the on-chain job handler ---
+
+/// vLLM connection config set by InferenceServer::start(), read by run_inference.
+static VLLM_ENDPOINT: OnceLock<VllmEndpoint> = OnceLock::new();
+
+struct VllmEndpoint {
+    url: String,
+    model: String,
+    client: reqwest::Client,
+}
+
+/// Called by InferenceServer to register the vLLM endpoint for on-chain job handlers.
+#[allow(clippy::result_large_err)]
+fn register_vllm_endpoint(config: &OperatorConfig) -> Result<(), RunnerError> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(300))
+        .build()
+        .map_err(|e| RunnerError::Other(format!("failed to build HTTP client: {e}").into()))?;
+    let endpoint = VllmEndpoint {
+        url: format!(
+            "http://{}:{}/v1/chat/completions",
+            config.vllm.host, config.vllm.port
+        ),
+        model: config.vllm.model.clone(),
+        client,
+    };
+    let _ = VLLM_ENDPOINT.set(endpoint);
+    Ok(())
+}
+
+/// Initialize the vLLM endpoint for testing. Call this before submitting jobs
+/// when running without the full InferenceServer background service (e.g. in
+/// BlueprintHarness tests with a mock vLLM endpoint).
+pub fn init_for_testing(base_url: &str, model: &str) {
+    let endpoint = VllmEndpoint {
+        url: format!("{base_url}/v1/chat/completions"),
+        model: model.to_string(),
+        client: reqwest::Client::new(),
+    };
+    let _ = VLLM_ENDPOINT.set(endpoint);
+}
+
+// --- Router ---
 
 pub fn router() -> Router {
     Router::new().route(INFERENCE_JOB, run_inference.layer(TangleLayer))
 }
 
-// ─── Job handler ─────────────────────────────────────────────────────────
+// --- Job handler ---
 
 /// Handle an inference job submitted on-chain.
 ///
-/// The vLLM subprocess must already be running (started by the
-/// [`InferenceServer`] background service). This handler calls the local
-/// vLLM OpenAI-compatible endpoint and returns the result on-chain.
+/// Uses the vLLM endpoint registered by [`InferenceServer`] rather than
+/// hardcoded values. The shared reqwest::Client is reused across calls.
 #[debug_job]
 pub async fn run_inference(
     TangleArg(request): TangleArg<InferenceRequest>,
-) -> TangleResult<InferenceResult> {
+) -> Result<TangleResult<InferenceResult>, RunnerError> {
+    let endpoint = VLLM_ENDPOINT.get().ok_or_else(|| {
+        RunnerError::Other("vLLM endpoint not registered — InferenceServer not started".into())
+    })?;
+
     let temperature = request.temperature as f32 / 1000.0;
     let max_tokens = request.maxTokens;
 
-    let base_url = match VLLM_BASE_URL.get() {
-        Some(url) => url,
-        None => {
-            tracing::error!("VLLM_BASE_URL not initialized — InferenceServer must start first");
-            return TangleResult(InferenceResult {
-                text: "error: vLLM not initialized".to_string(),
-                promptTokens: 0,
-                completionTokens: 0,
-            });
-        }
-    };
-
-    let client = match VLLM_CLIENT.get() {
-        Some(c) => c,
-        None => {
-            tracing::error!("VLLM_CLIENT not initialized — InferenceServer must start first");
-            return TangleResult(InferenceResult {
-                text: "error: HTTP client not initialized".to_string(),
-                promptTokens: 0,
-                completionTokens: 0,
-            });
-        }
-    };
-
-    let model_name = match VLLM_MODEL_NAME.get() {
-        Some(name) => name.as_str(),
-        None => {
-            tracing::error!("VLLM_MODEL_NAME not initialized — InferenceServer must start first");
-            return TangleResult(InferenceResult {
-                text: "error: model name not initialized".to_string(),
-                promptTokens: 0,
-                completionTokens: 0,
-            });
-        }
-    };
-
-    // Reject jobs that arrive before vLLM has passed its readiness health check
-    if VLLM_READY.get().is_none() {
-        tracing::warn!("vLLM subprocess is still starting up — rejecting job");
-        return TangleResult(InferenceResult {
-            text: "error: vLLM is not ready yet".to_string(),
-            promptTokens: 0,
-            completionTokens: 0,
-        });
-    }
-
     let vllm_body = serde_json::json!({
-        "model": model_name,
+        "model": endpoint.model,
         "messages": [{"role": "user", "content": request.prompt}],
         "max_tokens": max_tokens,
         "temperature": temperature,
         "stream": false,
     });
 
-    let resp = match client
-        .post(format!("{base_url}/v1/chat/completions"))
+    let resp = endpoint
+        .client
+        .post(&endpoint.url)
         .json(&vllm_body)
         .send()
         .await
-    {
-        Ok(r) => r,
-        Err(e) => {
+        .map_err(|e| {
             tracing::error!(error = %e, "vLLM request failed");
-            return TangleResult(InferenceResult {
-                text: format!("error: vLLM request failed: {e}"),
-                promptTokens: 0,
-                completionTokens: 0,
-            });
-        }
-    };
+            RunnerError::Other(format!("vLLM request failed: {e}").into())
+        })?;
 
-    let body: serde_json::Value = match resp.json().await {
-        Ok(b) => b,
-        Err(e) => {
-            tracing::error!(error = %e, "vLLM response parse failed");
-            return TangleResult(InferenceResult {
-                text: format!("error: vLLM response parse failed: {e}"),
-                promptTokens: 0,
-                completionTokens: 0,
-            });
-        }
-    };
+    let body: serde_json::Value = resp.json().await.map_err(|e| {
+        tracing::error!(error = %e, "vLLM response parse failed");
+        RunnerError::Other(format!("vLLM response parse failed: {e}").into())
+    })?;
 
     let text = body["choices"][0]["message"]["content"]
         .as_str()
@@ -180,18 +144,21 @@ pub async fn run_inference(
     let prompt_tokens = body["usage"]["prompt_tokens"].as_u64().unwrap_or(0) as u32;
     let completion_tokens = body["usage"]["completion_tokens"].as_u64().unwrap_or(0) as u32;
 
-    TangleResult(InferenceResult {
+    Ok(TangleResult(InferenceResult {
         text,
         promptTokens: prompt_tokens,
         completionTokens: completion_tokens,
-    })
+    }))
 }
 
-// ─── Background service: HTTP server + vLLM subprocess ───────────────────
+// --- Background service: HTTP server + vLLM subprocess ---
 
 /// Runs the vLLM subprocess and the OpenAI-compatible HTTP proxy as a
 /// [`BackgroundService`]. This starts before the BlueprintRunner begins
 /// polling for on-chain jobs.
+///
+/// Includes a watchdog loop that monitors the vLLM process and respawns
+/// it if it exits unexpectedly.
 #[derive(Clone)]
 pub struct InferenceServer {
     pub config: Arc<OperatorConfig>,
@@ -202,25 +169,7 @@ impl BackgroundService for InferenceServer {
         let (tx, rx) = oneshot::channel();
         let config = self.config.clone();
 
-        // Set the vLLM base URL, model name, and shared HTTP client for the on-chain job handler
-        let vllm_url = format!("http://{}:{}", config.vllm.host, config.vllm.port);
-        let _ = VLLM_BASE_URL.set(vllm_url);
-        let _ = VLLM_MODEL_NAME.set(config.vllm.model.clone());
-        let _ = VLLM_CLIENT.set(reqwest::Client::new());
-
         tokio::spawn(async move {
-            // 0. Derive operator address from private key
-            let operator_address: Address =
-                match config.tangle.operator_key.parse::<PrivateKeySigner>() {
-                    Ok(signer) => signer.address(),
-                    Err(e) => {
-                        tracing::error!(error = %e, "failed to parse operator key");
-                        let _ = tx.send(Err(RunnerError::Other(e.to_string().into())));
-                        return;
-                    }
-                };
-            tracing::info!(address = %operator_address, "operator address derived");
-
             // 1. Start the vLLM subprocess
             let vllm_handle = match VllmProcess::spawn(config.clone()).await {
                 Ok(h) => Arc::new(h),
@@ -237,8 +186,14 @@ impl BackgroundService for InferenceServer {
                 let _ = tx.send(Err(RunnerError::Other(e.to_string().into())));
                 return;
             }
-            let _ = VLLM_READY.set(());
             tracing::info!("vLLM is ready");
+
+            // Register the vLLM endpoint for on-chain job handlers
+            if let Err(e) = register_vllm_endpoint(&config) {
+                tracing::error!(error = %e, "failed to register vLLM endpoint");
+                let _ = tx.send(Err(e));
+                return;
+            }
 
             // 2. Build billing client
             let billing_client = match billing::BillingClient::new(config.clone()).await {
@@ -250,26 +205,100 @@ impl BackgroundService for InferenceServer {
                 }
             };
 
-            // 3. Start the HTTP server
+            // 3. Build semaphore from config (0 = unlimited)
+            let max_concurrent = config.server.max_concurrent_requests;
+            let semaphore = Arc::new(if max_concurrent == 0 {
+                Semaphore::new(Semaphore::MAX_PERMITS)
+            } else {
+                Semaphore::new(max_concurrent)
+            });
+
+            // 4. Create shutdown channel for graceful shutdown
+            let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+
+            // 5. Start the HTTP server
+            let operator_address = billing_client.operator_address();
+            let nonce_store = Arc::new(server::NonceStore::load(
+                config.billing.nonce_store_path.clone(),
+            ));
             let state = server::AppState {
                 config: config.clone(),
                 vllm: vllm_handle.clone(),
                 billing: billing_client,
-                concurrency: Arc::new(tokio::sync::Semaphore::new(
-                    config.server.max_concurrent_requests,
-                )),
+                semaphore,
+                nonce_store,
+                active_per_account: Arc::new(RwLock::new(HashMap::new())),
                 operator_address,
             };
 
-            match server::start(state).await {
+            match server::start(state, shutdown_rx).await {
                 Ok(_join_handle) => {
-                    tracing::info!("HTTP server started");
-                    // Don't send on tx yet — server runs until shutdown.
-                    // The oneshot stays open, signaling "still alive" to the runner.
+                    tracing::info!("HTTP server started — background service ready");
+                    // Signal readiness to the BlueprintRunner.
+                    // Ok(()) means "started successfully". The runner treats this
+                    // as the service finishing; since we keep running in the
+                    // watchdog loop below, this is the correct signal.
+                    let _ = tx.send(Ok(()));
                 }
                 Err(e) => {
                     tracing::error!(error = %e, "failed to start HTTP server");
                     let _ = tx.send(Err(RunnerError::Other(e.to_string().into())));
+                    return;
+                }
+            }
+
+            // 6. Watchdog loop: monitor vLLM process and respawn on crash.
+            //    _live_handle keeps the most recently spawned VllmProcess alive
+            //    so its Drop impl doesn't kill the child process.
+            //    Loop exits on SIGINT/SIGTERM for graceful shutdown.
+            let mut _live_handle: Option<VllmProcess> = None;
+            loop {
+                tokio::select! {
+                    _ = tokio::time::sleep(Duration::from_secs(10)) => {}
+                    _ = tokio::signal::ctrl_c() => {
+                        tracing::info!("received shutdown signal, stopping watchdog");
+                        let _ = shutdown_tx.send(true);
+                        vllm_handle.shutdown().await;
+                        if let Some(ref h) = _live_handle {
+                            h.shutdown().await;
+                        }
+                        return;
+                    }
+                }
+
+                if !vllm_handle.is_healthy().await {
+                    tracing::error!("vLLM health check failed — attempting respawn");
+
+                    // Shut down the old process
+                    vllm_handle.shutdown().await;
+
+                    // Attempt respawn with backoff
+                    let mut respawn_delay = Duration::from_secs(5);
+                    loop {
+                        tracing::info!(delay_secs = respawn_delay.as_secs(), "respawning vLLM");
+                        match VllmProcess::spawn(config.clone()).await {
+                            Ok(new_handle) => {
+                                match new_handle.wait_ready().await {
+                                    Ok(()) => {
+                                        tracing::info!("vLLM respawned successfully");
+                                        // Store the new handle to prevent Drop from killing it.
+                                        // The HTTP server proxies via host:port so requests
+                                        // reach the new process automatically.
+                                        _live_handle = Some(new_handle);
+                                        break;
+                                    }
+                                    Err(e) => {
+                                        tracing::error!(error = %e, "respawned vLLM failed readiness");
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                tracing::error!(error = %e, "failed to respawn vLLM");
+                            }
+                        }
+                        tokio::time::sleep(respawn_delay).await;
+                        respawn_delay = (respawn_delay * 2).min(Duration::from_secs(120));
+                    }
                 }
             }
         });

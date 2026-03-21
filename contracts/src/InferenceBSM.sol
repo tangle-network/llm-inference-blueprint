@@ -350,14 +350,14 @@ contract InferenceBSM is IBlueprintServiceManager {
     // ═══════════════════════════════════════════════════════════════════════
 
     /// @notice Validate an inference job submission
-    /// @dev inputs = abi.encode(string prompt, uint32 maxTokens, uint32 temperatureE4)
+    /// @dev inputs = abi.encode(string prompt, uint32 maxTokens, uint64 temperature)
     function onJobCall(
         uint64 serviceId,
         uint8,
         uint64 jobCallId,
         bytes calldata inputs
     ) external payable onlyFromTangle {
-        (, uint32 maxTokens,) = abi.decode(inputs, (string, uint32, uint32));
+        (, uint32 maxTokens,) = abi.decode(inputs, (string, uint32, uint64));
 
         emit InferenceJobSubmitted(serviceId, jobCallId, maxTokens);
     }
@@ -473,6 +473,23 @@ contract InferenceBSM is IBlueprintServiceManager {
     /// @notice Check if an operator is registered and active
     function isOperatorActive(address operator) external view returns (bool) {
         return operatorCaps[operator].active;
+    }
+
+    /// @notice Get operator pricing for a given operator address.
+    /// @dev Returns the model's per-token prices and the operator's endpoint.
+    ///      Reverts if the operator is not registered or inactive.
+    function getOperatorPricing(address operator)
+        external
+        view
+        returns (uint64 pricePerInputToken, uint64 pricePerOutputToken, string memory endpoint)
+    {
+        OperatorCapabilities storage caps = operatorCaps[operator];
+        if (!caps.active) revert OperatorNotRegistered(operator);
+
+        bytes32 modelKey = keccak256(bytes(caps.model));
+        ModelConfig storage mc = modelConfigs[modelKey];
+
+        return (mc.pricePerInputToken, mc.pricePerOutputToken, caps.endpoint);
     }
 
     receive() external payable {}

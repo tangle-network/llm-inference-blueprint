@@ -203,7 +203,7 @@ contract InferenceBSMTest is Test {
     // ─── Job Lifecycle ───────────────────────────────────────────────────
 
     function test_onJobCall() public {
-        bytes memory inputs = abi.encode("What is Tangle?", uint32(256), uint32(7000));
+        bytes memory inputs = abi.encode("What is Tangle?", uint32(256), uint64(7000));
 
         vm.prank(tangleCore);
         bsm.onJobCall(1, 0, 1, inputs);
@@ -212,7 +212,7 @@ contract InferenceBSMTest is Test {
     function test_onJobResult() public {
         _registerOperator(operator1);
 
-        bytes memory inputs = abi.encode("What is Tangle?", uint32(256), uint32(7000));
+        bytes memory inputs = abi.encode("What is Tangle?", uint32(256), uint64(7000));
         bytes memory outputs = abi.encode("Tangle is an EVM-native staking protocol.", uint32(5), uint32(8));
 
         vm.prank(tangleCore);
@@ -220,7 +220,7 @@ contract InferenceBSMTest is Test {
     }
 
     function test_onJobResult_unregisteredOperator() public {
-        bytes memory inputs = abi.encode("test", uint32(10), uint32(7000));
+        bytes memory inputs = abi.encode("test", uint32(10), uint64(7000));
         bytes memory outputs = abi.encode("result", uint32(2), uint32(3));
 
         vm.prank(tangleCore);
@@ -270,6 +270,22 @@ contract InferenceBSMTest is Test {
 
     function test_canJoin_inactiveOperator() public view {
         assertFalse(bsm.canJoin(1, operator1));
+    }
+
+    // ─── Operator Pricing Query ────────────────────────────────────────
+
+    function test_getOperatorPricing() public {
+        _registerOperator(operator1);
+
+        (uint64 inputPrice, uint64 outputPrice, string memory endpoint) = bsm.getOperatorPricing(operator1);
+        assertEq(inputPrice, 1);
+        assertEq(outputPrice, 2);
+        assertEq(keccak256(bytes(endpoint)), keccak256(bytes("https://operator.example.com")));
+    }
+
+    function test_getOperatorPricing_unregistered() public {
+        vm.expectRevert(abi.encodeWithSelector(InferenceBSM.OperatorNotRegistered.selector, operator1));
+        bsm.getOperatorPricing(operator1);
     }
 
     // ─── Helpers ─────────────────────────────────────────────────────────

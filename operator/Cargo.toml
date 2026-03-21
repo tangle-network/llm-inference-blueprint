@@ -29,21 +29,26 @@ k256 = { workspace = true }
 
 # Web framework (for OpenAI-compatible HTTP server)
 axum = { version = "0.7", features = ["json", "macros"] }
-tower-http = { version = "0.5", features = ["cors", "trace"] }
+tower-http = { version = "0.5", features = ["cors", "limit", "trace", "timeout"] }
 
 # Config
 config = "0.14"
 dotenvy = "0.15"
+
+# Metrics
+prometheus = { workspace = true }
+
+# Streaming
+futures-util = { workspace = true }
+tokio-stream = { workspace = true }
 
 # Misc
 bytes = "1"
 uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
-# Path deps for local dev; switch to version for publishing
-blueprint-sdk = { path = "/home/drew/code/blueprint/crates/sdk", features = ["testing", "tangle"] }
-blueprint-anvil-testing-utils = { path = "/home/drew/code/blueprint/crates/testing-utils/anvil" }
-# blueprint-sdk = { version = "0.1.0-alpha.22", features = ["testing", "tangle"] }
-# blueprint-anvil-testing-utils = "0.1.0-alpha.21"
+blueprint-sdk = { version = "0.1.0-alpha.22", features = ["testing", "tangle"] }
+blueprint-anvil-testing-utils = "0.1.0-alpha.21"
+wiremock = "0.6"
 alloy-primitives = "1"
 alloy-sol-types = "1"

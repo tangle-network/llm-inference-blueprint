@@ -1,0 +1,308 @@
+{
+  "task": {
+    "id": "engineering-vllm-inference-blueprint",
+    "goal": [
+      "Extend the chat completions request handling path to read the `stream` field from `ChatCompletionRequest` and switch behavior based on it without regressing the existing non-streaming path.",
+      "For `stream=false` or absent, preserve the current synchronous `/v1/chat/completions` behavior and response schema.",
+      "For `stream=true`, call the upstream vLLM chat completions endpoint in streaming mode and return a streaming HTTP response to the client rather than buffering the full completion.",
+      "Emit OpenAI-compatible SSE framing exactly: each upstream chunk that should reach the client must be serialized as a single `data: {json}\\n\\n` event, and the stream must end with a final `data: [DONE]\\n\\n` event.",
+      "Preserve chunk ordering and stream incrementality so clients receive tokens as they arrive from vLLM; do not convert the stream back into a buffered response.",
+      "Ensure the HTTP response for streaming uses the correct SSE media type and does not violate SSE framing rules with missing separators, mixed plain text, or malformed JSON payloads.",
+      "Map or pass through chunk payloads in the OpenAI chat completion chunk shape expected by clients consuming `/v1/chat/completions` streams. If the upstream shape differs, normalize it in the proxy layer rather than leaking vLLM-specific framing.",
+      "Add an automated test that exercises the streaming branch end to end at the handler level, using the repository’s existing test style and mocking/stubbing the upstream vLLM stream rather than relying on a live model server.",
+      "The streaming test should verify at minimum: SSE content type, one or more `data: {json}` events, correct `\\n\\n` event boundaries, and the final `data: [DONE]` terminator.",
+      "The change should follow existing repository patterns for request forwarding, error handling, async streaming, and test utilities. Avoid introducing parallel custom response paths if the codebase already has a shared proxy/client abstraction."
+    ],
+    "environmentKind": "code"
+  },
+  "events": [
+    {
+      "at": "2026-03-19T02:21:26.074Z",
+      "kind": "task.started",
+      "summary": "task engineering-vllm-inference-blueprint started",
+      "metadata": {
+        "goal": [
+          "Extend the chat completions request handling path to read the `stream` field from `ChatCompletionRequest` and switch behavior based on it without regressing the existing non-streaming path.",
+          "For `stream=false` or absent, preserve the current synchronous `/v1/chat/completions` behavior and response schema.",
+          "For `stream=true`, call the upstream vLLM chat completions endpoint in streaming mode and return a streaming HTTP response to the client rather than buffering the full completion.",
+          "Emit OpenAI-compatible SSE framing exactly: each upstream chunk that should reach the client must be serialized as a single `data: {json}\\n\\n` event, and the stream must end with a final `data: [DONE]\\n\\n` event.",
+          "Preserve chunk ordering and stream incrementality so clients receive tokens as they arrive from vLLM; do not convert the stream back into a buffered response.",
+          "Ensure the HTTP response for streaming uses the correct SSE media type and does not violate SSE framing rules with missing separators, mixed plain text, or malformed JSON payloads.",
+          "Map or pass through chunk payloads in the OpenAI chat completion chunk shape expected by clients consuming `/v1/chat/completions` streams. If the upstream shape differs, normalize it in the proxy layer rather than leaking vLLM-specific framing.",
+          "Add an automated test that exercises the streaming branch end to end at the handler level, using the repository’s existing test style and mocking/stubbing the upstream vLLM stream rather than relying on a live model server.",
+          "The streaming test should verify at minimum: SSE content type, one or more `data: {json}` events, correct `\\n\\n` event boundaries, and the final `data: [DONE]` terminator.",
+          "The change should follow existing repository patterns for request forwarding, error handling, async streaming, and test utilities. Avoid introducing parallel custom response paths if the codebase already has a shared proxy/client abstraction."
+        ],
+        "environment": "code"
+      }
+    },
+    {
+      "at": "2026-03-19T02:21:26.084Z",
+      "kind": "context.built",
+      "summary": "round 1 context built"
+    },
+    {
+      "at": "2026-03-19T02:21:26.084Z",
+      "kind": "plan.created",
+      "summary": "round 1 plan created with 1 track(s)"
+    },
+    {
+      "at": "2026-03-19T02:21:26.085Z",
+      "kind": "track.started",
+      "trackId": "implement",
+      "summary": "track implement started"
+    },
+    {
+      "at": "2026-03-19T02:22:38.818Z",
+      "kind": "track.completed",
+      "trackId": "implement",
+      "summary": "track implement completed"
+    },
+    {
+      "at": "2026-03-19T02:23:04.677Z",
+      "kind": "validation.completed",
+      "summary": "round 1 validation pass",
+      "metadata": {
+        "recommendation": "complete"
+      }
+    },
+    {
+      "at": "2026-03-19T02:23:04.677Z",
+      "kind": "decision.made",
+      "summary": "round 1 decision: completed",
+      "metadata": {
+        "done": "true"
+      }
+    },
+    {
+      "at": "2026-03-19T02:23:04.678Z",
+      "kind": "run.completed",
+      "summary": "run finished with status completed"
+    }
+  ],
+  "evidence": [
+    {
+      "kind": "log",
+      "label": "git-status",
+      "value": "M Cargo.toml\n M contracts/src/InferenceBSM.sol\n M contracts/test/InferenceBSM.t.sol\n M operator/Cargo.toml\n M operator/src/billing.rs\n M operator/src/lib.rs\n M operator/src/main.rs\n M operator/src/server.rs\n M operator/src/vllm.rs\n?? .foreman/\n?? operator/src/metrics.rs\n?? operator/tests/"
+    },
+    {
+      "kind": "artifact",
+      "label": "doc:CLAUDE.md",
+      "value": "# CLAUDE.md\n\n## Project Overview\n\nvLLM Inference Blueprint for Tangle Network. Operators serve LLM inference via vLLM, users pay anonymously through ShieldedCredits.\n\n## Architecture\n\nUses the Tangle Blueprint SDK (`blueprint-sdk` crate) with the canonical lib+bin pattern.\n\n- **contracts/**: Solidity BSM (InferenceBSM) -- validates operator registration (GPU caps), restricts payment to tsUSD, stores model metadata\n- **operator/src/lib.rs**: Library crate -- `router()`, `run_inference` job handler (TangleArg/TangleResult), `InferenceServer` BackgroundService, sol! ABI types\n- **operator/src/main.rs**: Binary crate -- BlueprintRunner wiring only (BlueprintEnvironment, TangleProducer, TangleConsumer)\n- **operator/src/server.rs**: Axum HTTP server with OpenAI-compatible endpoints (runs as BackgroundService)\n- **operator/src/billing.rs**: ShieldedCredits on-chain billing (authorizeSpend/claimPayment) and off-chain EIP-712 SpendAuth signature verification\n- **operator/src/vllm.rs**: vLLM subprocess management (spawn, health check, proxy)\n- **operator/src/config.rs**: Operator config structs (vLLM, billing, GPU, server)\n- **operator/src/health.rs**: GPU detection via nvidia-smi\n- **sdk/**: TypeScript client -- signs SpendAuth, discovers operators, sends inference requests\n\n## Build Commands\n\n### Contracts\n```bash\ncd contracts && forge build && forge test\n```\n\n### Operator\n```bash\ncargo build -p vllm-inference\n```\n\n### SDK\n```bash\ncd sdk && npm install && npm run build\n```\n\n## SDK Patterns\n\nThis project follows the Tangle Blueprint SDK patterns:\n\n- **Router**: `Router::new().route(JOB_ID, handler.layer(TangleLayer))`\n- **Job handlers**: `async fn handler(TangleArg(req): TangleArg<SolType>) -> TangleResult<SolType>`\n- **ABI types**: Defined via `alloy_sol_types::sol!` macro\n- **Background services**: `impl BackgroundService for InferenceServer`\n- **Runner**: `BlueprintRunner::builder(TangleConfig::default(), env).router(...).producer(...).consumer(...).run().await`\n\n## Key Dependencies\n\n```toml\nblueprint-sdk = { version = \"0.1.0-alpha.22\", features = [\"std\", \"tangle\", \"macros\"] }\n```\n\n## Billing Flow\n\n1. User funds ShieldedCredits account (one ZK proof)\n2. User signs EIP-712 SpendAuth per request (off-chain, cheap)\n3. Operator verifies SpendAuth signature off-chain (ecrecover)\n4. Operator serves inference\n5. Operator calls `authorizeSpend` on-chain (reserves payment)\n6. Operator calls `claimPayment` (receives tokens)\n\n## Testing\n\n- Contracts: `forge test` in contracts/\n- Operator: `cargo test` at workspace root\n- SDK: `npm test` in sdk/\n"
+    },
+    {
+      "kind": "artifact",
+      "label": "doc:README.md",
+      "value": "# vLLM Inference Blueprint for Tangle\n\nA Tangle Blueprint that enables operators to serve LLM inference via [vLLM](https://github.com/vllm-project/vllm), with anonymous payment through the ShieldedCredits system.\n\n## Architecture\n\n```\nUser                         Operator                      Tangle Chain\n |                              |                              |\n |  1. Fund ShieldedCredits     |                              |\n |  (one ZK proof) ────────────────────────────────────────────>|\n |                              |                              |\n |  2. Sign SpendAuth (off-chain, free)                        |\n |  3. POST /v1/chat/completions ──>|                          |\n |                              |  4. Verify sig (ecrecover)   |\n |                              |  5. Proxy to vLLM            |\n |  6. Response <───────────────|                              |\n |                              |  7. authorizeSpend ──────────>|\n |                              |  8. claimPayment ────────────>|\n```\n\n## Quick Start\n\n### Prerequisites\n\n- NVIDIA GPU with CUDA 12.x drivers\n- Docker with NVIDIA Container Toolkit\n- Foundry (`curl -L https://foundry.paradigm.xyz | bash`)\n- Rust 1.82+ (for building from source)\n- Node.js 20+ (for the SDK)\n\n### Local Development\n\n```bash\n# 1. Start local chain + operator\ncp deploy/config.example.json deploy/config.json\n# Edit config.json with your settings\n\ndocker compose up -d anvil\ndocker compose up operator\n\n# 2. Deploy contracts (in another terminal)\ncd contracts\nforge soldeer update\nforge build\nforge test\n\n# 3. Test with the SDK\ncd sdk\nnpm install\nnpm run build\n```\n\n### Using the SDK\n\n```typescript\nimport { createInferenceClient } from \"@tangle-network/vllm-inference-sdk\";\n\nconst client = createInferenceClient({\n  operatorUrl: \"http://localhost:8080\",\n  shieldedCreditsAddress: \"0x...\",\n  chainId: 31337,\n  commitment: \"0x...\",\n  serviceId: 1n,\n  operatorAddress: \"0x...\",\n  spendingKeyPrivate: \"0x...\",\n});\n\nconst response = await client.chat([\n  { role: \"user\", content: \"Explain zero-knowledge proofs in one sentence.\" },\n]);\n\nconsole.log(response.choices[0].message.content);\n```\n\n### Building the Operator from Source\n\n```bash\ncargo build --release -p vllm-operator\n\n# Run with config file\n./target/release/vllm-operator --config deploy/config.json\n\n# Or with environment variables\nexport VLLM_OP_TANGLE__RPC_URL=http://localhost:8545\nexport VLLM_OP_TANGLE__OPERATOR_KEY=0xac09...\n./target/release/vllm-operator --model meta-llama/Llama-3.1-8B-Instruct\n```\n\n## Contract: InferenceBSM\n\nThe Blueprint Service Manager validates:\n- **Operator registration**: GPU capabilities must meet model requirements (VRAM, count)\n- **Payment restriction**: Only tsUSD (ShieldedCredits pool token) accepted\n- **Model metadata**: Configurable pricing per model (input/output token rates)\n- **Job schema**: `(string prompt, uint32 maxTokens, uint32 temperatureE4)` in, `(string text, uint32 promptTokens, uint32 completionTokens)` out\n\n## Billing Flow\n\n1. **User** funds a ShieldedCredits account with one ZK proof (VAnchor withdrawal)\n2. **User** signs EIP-712 SpendAuth per request (off-chain, free, anonymous)\n3. **Operator** verifies SpendAuth via ecrecover (instant, no gas)\n4. **Operator** serves inference via vLLM\n5. **Operator** calls `authorizeSpend()` then `claimPayment()` on-chain\n\nThe user's real identity is never revealed. The operator only sees the ephemeral spending key.\n\n## Configuration\n\nSee `deploy/config.example.json` for all options. Key settings:\n\n| Setting | Description |\n|---------|-------------|\n| `vllm.model` | HuggingFace model ID |\n| `vllm.tensor_parallel_size` | Number of GPUs for tensor parallelism |\n| `billing.price_per_input_token` | Price per input token in tsUSD base units |\n| `billing.price_per_output_token` | Price per output token in tsUSD base units |\n| `gpu.expected_gpu_count` | Required GPU count (startup check) |\n\n## License\n\nMIT OR Apache-2.0\n"
+    },
+    {
+      "kind": "artifact",
+      "label": "doc:Cargo.toml",
+      "value": "[workspace]\nmembers = [\"operator\"]\nresolver = \"2\"\n\n[workspace.package]\nversion = \"0.1.0\"\nedition = \"2021\"\nlicense = \"MIT OR Apache-2.0\"\nrepository = \"https://github.com/tangle-network/vllm-inference-blueprint\"\n\n[workspace.dependencies]\nblueprint-sdk = { version = \"0.1.0-alpha.22\", features = [\"std\", \"tangle\", \"macros\"] }\nalloy = { version = \"1\", features = [\"full\", \"signer-local\", \"provider-http\"] }\nalloy-sol-types = \"1\"\ntokio = { version = \"1\", features = [\"full\"] }\nserde = { version = \"1\", features = [\"derive\"] }\nserde_json = \"1\"\ntracing = \"0.1\"\ntracing-subscriber = { version = \"0.3\", features = [\"env-filter\", \"json\"] }\nreqwest = { version = \"0.12\", features = [\"json\", \"stream\"] }\nanyhow = \"1\"\nthiserror = \"2\"\nhex = \"0.4\"\nk256 = { version = \"0.13\", features = [\"ecdsa\"] }\nprometheus = \"0.13\"\nfutures-util = \"0.3\"\ntokio-stream = \"0.1\"\n"
+    },
+    {
+      "kind": "test",
+      "label": "cargo fmt --all",
+      "value": "",
+      "metadata": {
+        "passed": "true",
+        "exitCode": "0"
+      }
+    },
+    {
+      "kind": "test",
+      "label": "cargo fmt --all --check",
+      "value": "",
+      "metadata": {
+        "passed": "true",
+        "exitCode": "0"
+      }
+    },
+    {
+      "kind": "test",
+      "label": "cargo clippy --workspace -- -D warnings",
+      "value": "Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.42s\nwarning: the following packages contain code that will be rejected by a future version of Rust: trie-db v0.29.1\nnote: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`",
+      "metadata": {
+        "passed": "true",
+        "exitCode": "0"
+      }
+    },
+    {
+      "kind": "test",
+      "label": "cargo test --workspace",
+      "value": "running 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nrunning 18 tests\ntest test_config_default_max_concurrent_requests ... ok\ntest test_semaphore_limits_concurrency ... ok\ntest test_request_guard_records_success ... ok\ntest test_sse_done_marker_present ... ok\ntest test_request_guard_defaults_to_error ... ok\ntest test_request_guard_records_tokens_on_drop ... ok\ntest test_sse_no_usage_in_chunks ... ok\ntest test_request_guard_tracks_active_requests ... ok\ntest test_metrics_gather_produces_valid_output ... ok\ntest test_semaphore_zero_config_means_unlimited ... ok\ntest test_billing_calculate_cost ... ok\ntest test_sse_usage_extraction ... ok\ntest test_upstream_error_returns_error_status ... ok\ntest test_streaming_via_wiremock ... ok\ntest test_non_streaming_via_wiremock ... ok\ntest test_streaming_through_handler ... ok\ntest test_stream_field_defaults_to_false ... ok\ntest test_non_streaming_through_handler ... ok\n\ntest result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s\n\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\nFinished `test` profile [unoptimized + debuginfo] target(s) in 0.45s\nwarning: the following packages contain code that will be rejected by a future version of Rust: trie-db v0.29.1\nnote: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`\n     Running unittests src/lib.rs (target/debug/deps/vllm_inference-5989e26cf39f161d)\n     Running unittests src/main.rs (target/debug/deps/vllm_operator-0e53b3beb81f7323)\n     Running tests/server_tests.rs (target/debug/deps/server_tests-6e6fcc87fd21ebe7)\n   Doc-tests vllm_inference",
+      "metadata": {
+        "passed": "true",
+        "exitCode": "0"
+      }
+    },
+    {
+      "kind": "test",
+      "label": "cd /home/drew/code/vllm-inference-blueprint && cargo fmt --all -- --check",
+      "value": "",
+      "metadata": {
+        "passed": "true",
+        "exitCode": "0"
+      }
+    },
+    {
+      "kind": "test",
+      "label": "cd /home/drew/code/vllm-inference-blueprint && cargo clippy --workspace -- -D warnings",
+      "value": "Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.44s\nwarning: the following packages contain code that will be rejected by a future version of Rust: trie-db v0.29.1\nnote: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`",
+      "metadata": {
+        "passed": "true",
+        "exitCode": "0"
+      }
+    },
+    {
+      "kind": "test",
+      "label": "cd /home/drew/code/vllm-inference-blueprint && cargo test --workspace",
+      "value": "running 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nrunning 18 tests\ntest test_config_default_max_concurrent_requests ... ok\ntest test_request_guard_records_success ... ok\ntest test_request_guard_tracks_active_requests ... ok\ntest test_request_guard_records_tokens_on_drop ... ok\ntest test_semaphore_limits_concurrency ... ok\ntest test_request_guard_defaults_to_error ... ok\ntest test_sse_usage_extraction ... ok\ntest test_sse_done_marker_present ... ok\ntest test_sse_no_usage_in_chunks ... ok\ntest test_semaphore_zero_config_means_unlimited ... ok\ntest test_metrics_gather_produces_valid_output ... ok\ntest test_billing_calculate_cost ... ok\ntest test_upstream_error_returns_error_status ... ok\ntest test_non_streaming_via_wiremock ... ok\ntest test_streaming_via_wiremock ... ok\ntest test_stream_field_defaults_to_false ... ok\ntest test_streaming_through_handler ... ok\ntest test_non_streaming_through_handler ... ok\n\ntest result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s\n\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\nFinished `test` profile [unoptimized + debuginfo] target(s) in 0.45s\nwarning: the following packages contain code that will be rejected by a future version of Rust: trie-db v0.29.1\nnote: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`\n     Running unittests src/lib.rs (target/debug/deps/vllm_inference-5989e26cf39f161d)\n     Running unittests src/main.rs (target/debug/deps/vllm_operator-0e53b3beb81f7323)\n     Running tests/server_tests.rs (target/debug/deps/server_tests-6e6fcc87fd21ebe7)\n   Doc-tests vllm_inference",
+      "metadata": {
+        "passed": "true",
+        "exitCode": "0"
+      }
+    },
+    {
+      "kind": "log",
+      "label": "stdout",
+      "value": "{\"type\":\"thread.started\",\"thread_id\":\"019d03e6-ed42-7d31-8b26-9c504e06ecc6\"}\n{\"type\":\"turn.started\"}\n{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"{\\\"status\\\":\\\"pass\\\",\\\"recommendation\\\":\\\"complete\\\",\\\"summary\\\":\\\"Deterministic gates are reported as passing, and the implementation evidence indicates the full requested streaming/non-streaming split was added on the `ChatCompletionRequest.stream` field, with SSE framing normalized for OpenAI-compatible chat-completions streaming and covered by a handler-level automated test.\\\",\\\"findings\\\":[],\\\"scores\\\":{\\\"quality\\\":9,\\\"correctness\\\":9},\\\"evidence\\\":[{\\\"kind\\\":\\\"note\\\",\\\"label\\\":\\\"deterministic_checks\\\",\\\"value\\\":\\\"Evidence states the implementation is 'complete and passing all checks' and that 'All 18 tests pass,' with the review instructions explicitly saying the separate evaluator already ran and verified `cargo fmt --all`, `cargo clippy --workspace -- -D warnings`, and `cargo test --workspace`.\\\"},{\\\"kind\\\":\\\"note\\\",\\\"label\\\":\\\"request_model_change\\\",\\\"value\\\":\\\"Implementation evidence cites `server.rs:69` adding `ChatCompletionRequest.stream` with `#[serde(default)]`, which satisfies the requirement to read streaming behavior from the request body and preserve absent/false as non-streaming.\\\"},{\\\"kind\\\":\\\"note\\\",\\\"label\\\":\\\"streaming_behavior\\\",\\\"value\\\":\\\"The implementation summary states that `stream=true` now triggers upstream vLLM chat completions streaming and returns a streaming HTTP response instead of buffering the full completion, while preserving the existing synchronous path for non-streaming requests.\\\"},{\\\"kind\\\":\\\"note\\\",\\\"label\\\":\\\"sse_contract\\\",\\\"value\\\":\\\"The evidence describes OpenAI-compatible SSE framing with per-chunk `data: {json}\\\\\\\\n\\\\\\\\n` events and a final `data: [DONE]\\\\\\\\n\\\\\\\\n` terminator, with upstream chunk normalization handled in the proxy layer rather than leaking vLLM-specific framing.\\\"},{\\\"kind\\\":\\\"note\\\",\\\"label\\\":\\\"test_coverage\\\",\\\"value\\\":\\\"Evidence says a new handler-level automated streaming test was added using mocked/stubbed upstream streaming, and that it verifies SSE content type, `data:` event framing, `\\\\\\\\n\\\\\\\\n` separators, JSON-parsable chunk payload, and the final `[DONE]` event.\\\"}]}\"}}\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":16666,\"cached_input_tokens\":3456,\"output_tokens\":938}}",
+      "metadata": {
+        "durationMs": "25853",
+        "providerId": "codex",
+        "exitCode": "0",
+        "providerFormat": "jsonl",
+        "sessionId": "019d03e6-ed42-7d31-8b26-9c504e06ecc6",
+        "inputTokens": "16666",
+        "cachedInputTokens": "3456",
+        "outputTokens": "938"
+      }
+    },
+    {
+      "kind": "log",
+      "label": "stderr",
+      "value": "",
+      "metadata": {
+        "durationMs": "25853",
+        "providerId": "codex",
+        "exitCode": "0",
+        "providerFormat": "jsonl",
+        "sessionId": "019d03e6-ed42-7d31-8b26-9c504e06ecc6",
+        "inputTokens": "16666",
+        "cachedInputTokens": "3456",
+        "outputTokens": "938"
+      }
+    },
+    {
+      "kind": "note",
+      "label": "deterministic_checks",
+      "value": "Evidence states the implementation is 'complete and passing all checks' and that 'All 18 tests pass,' with the review instructions explicitly saying the separate evaluator already ran and verified `cargo fmt --all`, `cargo clippy --workspace -- -D warnings`, and `cargo test --workspace`."
+    },
+    {
+      "kind": "note",
+      "label": "request_model_change",
+      "value": "Implementation evidence cites `server.rs:69` adding `ChatCompletionRequest.stream` with `#[serde(default)]`, which satisfies the requirement to read streaming behavior from the request body and preserve absent/false as non-streaming."
+    },
+    {
+      "kind": "note",
+      "label": "streaming_behavior",
+      "value": "The implementation summary states that `stream=true` now triggers upstream vLLM chat completions streaming and returns a streaming HTTP response instead of buffering the full completion, while preserving the existing synchronous path for non-streaming requests."
+    },
+    {
+      "kind": "note",
+      "label": "sse_contract",
+      "value": "The evidence describes OpenAI-compatible SSE framing with per-chunk `data: {json}\\n\\n` events and a final `data: [DONE]\\n\\n` terminator, with upstream chunk normalization handled in the proxy layer rather than leaking vLLM-specific framing."
+    },
+    {
+      "kind": "note",
+      "label": "test_coverage",
+      "value": "Evidence says a new handler-level automated streaming test was added using mocked/stubbed upstream streaming, and that it verifies SSE content type, `data:` event framing, `\\n\\n` separators, JSON-parsable chunk payload, and the final `[DONE]` event."
+    },
+    {
+      "kind": "log",
+      "label": "stdout",
+      "value": "{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"duration_ms\":72184,\"duration_api_ms\":67042,\"num_turns\":15,\"result\":\"All 18 tests pass. Let me verify the specific streaming test coverage against the success criteria by reviewing the test one more time.\\n\\nThe implementation is already **complete and passing all checks**. Here's the evidence:\\n\\n**Implementation (already in place):**\\n- `server.rs:69` — `ChatCompletionRequest.stream` field with `#[serde(default)]` (defaults to `false`)\\n- `server.rs:220-224` — Handler branches on `req.stream`: `handle_streaming` vs `handle_non_streaming`\\n- `server.rs:270-389` — `handle_streaming` proxies the upstream byte stream without buffering, returns `text/event-stream` with `no-cache` and `keep-alive` headers\\n- `vllm.rs:189-204` — `chat_completion_stream` returns raw `reqwest::Response` for true streaming proxy\\n- `vllm.rs:146-165` — `build_vllm_body` sets `stream: true` + `stream_options.include_usage` for upstream\\n\\n**Tests (already in place):**\\n- `test_streaming_through_handler` — full handler-level test: verifies `text/event-stream` content type, `data: {json}\\\\n\\\\n` events with valid JSON + `choices`, terminal `data: [DONE]`, all non-DONE lines parse as JSON\\n- `test_non_streaming_through_handler` — verifies non-streaming returns `application/json` with correct body\\n- `test_stream_field_defaults_to_false` — verifies omitting `stream` field defaults to non-streaming JSON\\n- `test_streaming_via_wiremock` / `test_non_streaming_via_wiremock` — direct upstream mock tests\\n\\n**Verification:**\\n- `cargo fmt --all -- --check`: clean\\n- `cargo clippy --workspace -- -D warnings`: exit 0\\n- `cargo test --workspace`: 18/18 passed\",\"stop_reason\":\"end_turn\",\"session_id\":\"ac97d735-dbdd-4aaa-8015-d8ef3e68ca35\",\"total_cost_usd\":0.46537475,\"usage\":{\"input_tokens\":10,\"cache_creation_input_tokens\":39535,\"cache_read_input_tokens\":334262,\"output_tokens\":2044,\"server_tool_use\":{\"web_search_requests\":0,\"web_fetch_requests\":0},\"service_tier\":\"standard\",\"cache_creation\":{\"ephemeral_1h_input_tokens\":39535,\"ephemeral_5m_input_tokens\":0},\"inference_geo\":\"\",\"iterations\":[],\"speed\":\"standard\"},\"modelUsage\":{\"claude-opus-4-6[1m]\":{\"inputTokens\":10,\"outputTokens\":2044,\"cacheReadInputTokens\":334262,\"cacheCreationInputTokens\":39535,\"webSearchRequests\":0,\"costUSD\":0.46537475,\"contextWindow\":1000000,\"maxOutputTokens\":64000}},\"permission_denials\":[],\"fast_mode_state\":\"off\",\"uuid\":\"d60b3427-0e88-4fc1-a2ba-d7dfad44a70b\"}",
+      "metadata": {
+        "durationMs": "72732",
+        "providerId": "claude",
+        "exitCode": "0",
+        "costUsd": "0.46537475",
+        "providerFormat": "json",
+        "sessionId": "ac97d735-dbdd-4aaa-8015-d8ef3e68ca35",
+        "stopReason": "end_turn",
+        "numTurns": "15",
+        "modelIds": "claude-opus-4-6[1m]",
+        "inputTokens": "10",
+        "cacheCreationInputTokens": "39535",
+        "cacheReadInputTokens": "334262",
+        "outputTokens": "2044",
+        "totalCostUsd": "0.46537475"
+      }
+    },
+    {
+      "kind": "log",
+      "label": "stderr",
+      "value": "",
+      "metadata": {
+        "durationMs": "72732",
+        "providerId": "claude",
+        "exitCode": "0",
+        "costUsd": "0.46537475",
+        "providerFormat": "json",
+        "sessionId": "ac97d735-dbdd-4aaa-8015-d8ef3e68ca35",
+        "stopReason": "end_turn",
+        "numTurns": "15",
+        "modelIds": "claude-opus-4-6[1m]",
+        "inputTokens": "10",
+        "cacheCreationInputTokens": "39535",
+        "cacheReadInputTokens": "334262",
+        "outputTokens": "2044",
+        "totalCostUsd": "0.46537475"
+      }
+    },
+    {
+      "kind": "log",
+      "label": "git-status",
+      "value": "M Cargo.toml\n M contracts/src/InferenceBSM.sol\n M contracts/test/InferenceBSM.t.sol\n M operator/Cargo.toml\n M operator/src/billing.rs\n M operator/src/lib.rs\n M operator/src/main.rs\n M operator/src/server.rs\n M operator/src/vllm.rs\n?? .foreman/\n?? operator/src/metrics.rs\n?? operator/tests/"
+    },
+    {
+      "kind": "diff",
+      "label": "git-diff-stat",
+      "value": "Cargo.toml                        |   3 +\n contracts/src/InferenceBSM.sol    |  17 +++\n contracts/test/InferenceBSM.t.sol |  16 ++\n operator/Cargo.toml               |   8 +\n operator/src/billing.rs           |  95 +++++++-----\n operator/src/lib.rs               |  29 ++--\n operator/src/main.rs              |  12 +-\n operator/src/server.rs            | 302 ++++++++++++++++++++++++++++++--------\n operator/src/vllm.rs              |  81 +++++++---\n 9 files changed, 423 insertions(+), 140 deletions(-)"
+    },
+    {
+      "kind": "artifact",
+      "label": "changed-files",
+      "value": "Cargo.toml\ncontracts/src/InferenceBSM.sol\ncontracts/test/InferenceBSM.t.sol\noperator/Cargo.toml\noperator/src/billing.rs\noperator/src/lib.rs\noperator/src/main.rs\noperator/src/server.rs\noperator/src/vllm.rs"
+    }
+  ],
+  "outcome": {
+    "status": "completed",
+    "summary": "[deterministic] all deterministic checks passed for engineering-vllm-inference-blueprint | [judge] Deterministic gates are reported as passing, and the implementation evidence indicates the full requested streaming/non-streaming split was added on the `ChatCompletionRequest.stream` field, with SSE framing normalized for OpenAI-compatible chat-completions streaming and covered by a handler-level automated test.",
+    "validated": true
+  },
+  "metadata": {
+    "repoPath": "/home/drew/code/vllm-inference-blueprint",
+    "profileId": "engineering-foreman",
+    "selectedWorkerId": "claude",
+    "reviewWorkerId": "codex",
+    "plannerWorkerId": "codex",
+    "sandboxMode": "local",
+    "taskShape": "engineering",
+    "originalGoal": "Add streaming SSE support to /v1/chat/completions. When stream=true, proxy vLLM SSE chunks to client in OpenAI format (data: {json}\\n\\n, final data: [DONE]). Read the stream field from ChatCompletionRequest. Add a test for streaming response format. Run cargo fmt, cargo clippy -D warnings, cargo test.",
+    "successCriteriaJson": "[\"Submitting a chat completion request with `stream=true` causes `/v1/chat/completions` to return a streaming SSE response instead of the existing buffered JSON response.\",\"The handler reads the `stream` field from `ChatCompletionRequest` rather than inferring streaming from query params, headers, or ad hoc request parsing.\",\"The streaming response uses `text/event-stream` semantics and emits events framed as `data: <payload>\\\\n\\\\n`.\",\"Each non-terminal streamed event contains valid JSON for an OpenAI chat completion chunk payload; the test must parse at least one streamed JSON event successfully.\",\"The stream ends with exactly one terminal `data: [DONE]\\\\n\\\\n` event.\",\"The implementation preserves event order from the upstream vLLM stream and does not buffer the full upstream body before responding.\",\"Existing non-streaming `/v1/chat/completions` behavior remains intact for requests where `stream` is absent or false.\",\"A new automated test covers the streaming format and fails if framing changes to plain JSON, missing `data:` prefixes, missing blank-line separators, or missing `[DONE]` termination.\",\"`cargo fmt --all` completes successfully.\",\"`cargo clippy --workspace -- -D warnings` completes successfully.\",\"`cargo test --workspace` completes successfully.\"]",
+    "checkCommandsJson": "[\"cargo fmt --all\",\"cargo fmt --all --check\",\"cargo clippy --workspace -- -D warnings\",\"cargo test --workspace\",\"cd /home/drew/code/vllm-inference-blueprint && cargo fmt --all -- --check\",\"cd /home/drew/code/vllm-inference-blueprint && cargo clippy --workspace -- -D warnings\",\"cd /home/drew/code/vllm-inference-blueprint && cargo test --workspace\"]",
+    "toolCommandsJson": "[]",
+    "roundCount": "1",
+    "repairCount": "0",
+    "durationMs": "98604",
+    "checkPassRate": "1",
+    "escalationCount": "0",
+    "providerCostUsd": "0.46537475",
+    "promptPolicyMode": "explicit",
+    "hardenerPromptVariantId": "engineering-hardener:contract-v1",
+    "implementationPromptVariantId": "engineering-implementer:operator-v1",
+    "reviewPromptVariantId": "engineering-reviewer:auditor-v1"
+  }
+}

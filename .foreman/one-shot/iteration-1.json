@@ -1,0 +1,54 @@
+{
+  "iteration": 1,
+  "workerExitCode": 0,
+  "checks": [
+    {
+      "cmd": "cd /home/drew/code/vllm-inference-blueprint && cargo fmt --all -- --check",
+      "pass": true
+    },
+    {
+      "cmd": "cd /home/drew/code/vllm-inference-blueprint && cargo clippy --workspace -- -D warnings",
+      "pass": true
+    },
+    {
+      "cmd": "cd /home/drew/code/vllm-inference-blueprint && cargo test --workspace",
+      "pass": true
+    }
+  ],
+  "judges": [
+    {
+      "name": "billing_security",
+      "score": 6,
+      "findings": [
+        "CRITICAL: claim_payment does not actually use actual_amount on-chain. The contract's claimPayment(bytes32,address) takes no amount parameter — it always settles the full pre-authorized amount. The actual_amount parameter in BillingClient::claim_payment is purely cosmetic (logged but never sent on-chain). settle_billing calculates actual_cost and caps it, but this value is discarded at the contract boundary. Users are always charged the full pre-auth amount regardless of actual token usage. This contradicts requirement #6.",
+        "CRITICAL: No nonce replay protection. recover_spend_auth_signer does not check if a nonce has been used before. A malicious actor could replay a valid SpendAuth signature to authorize multiple spends from the same commitment. The operator should maintain a seen-nonces set or rely on on-chain nonce checking, but there's no evidence the on-chain authorizeSpend enforces uniqueness either — the operator just blindly submits.",
+        "HIGH: Streaming billing fails silently when usage is missing. If vLLM's streaming response never includes a usage object (e.g., older vLLM versions, or stream interrupted before final chunk), usage_rx never receives, the oneshot channel drops, and the Err(_) branch at line 539 just logs a warning — no billing settlement occurs. The operator served inference for free with pre-auth funds locked but unclaimed.",
+        "HIGH: No operator address validation. The SpendAuth's operator field is parsed but never checked against the actual operator's own address. A user could set operator to any address, and the signature would still verify. The on-chain authorizeSpend might enforce this, but the off-chain check doesn't — meaning the operator submits a transaction that may fail on-chain after already serving inference.",
+        "MEDIUM: Gas cost exposure is unbounded. authorize_spend and claim_payment each submit on-chain transactions but have no gas price cap or gas limit configuration. In gas price spikes, the operator pays more in gas than they earn from the inference request. The min_charge_amount config helps but doesn't cap gas price itself.",
+        "MEDIUM: Pre-auth amount parsed as u64 in settle_billing but as U256 in build_auth. The SpendAuth.amount is U256 on-chain but parsed as u64 at line 188-194 in server.rs. Any amount > u64::MAX silently overflows/fails, but more subtly, amounts between u64::MAX and U256::MAX would authorize a huge on-chain spend while the operator's u64 cost comparison is meaningless.",
+        "LOW: No refund mechanism. If authorizeSpend succeeds but inference fails (lines 367-378), the pre-authorized funds are locked until expiry. The code documents this as a 'known limitation' but it's a real money loss for users and creates a griefing vector — an attacker could trigger inference failures to lock funds.",
+        "LOW: Clock skew check uses .expect() on SystemTime (line 331-333). While unlikely to fail, this panics the server if the system clock is before UNIX epoch, violating requirement #5."
+      ]
+    },
+    {
+      "name": "reliability",
+      "score": 6,
+      "findings": [
+        "CRITICAL: Watchdog respawn is broken — lib.rs:238-249 spawns a new VllmProcess into a local variable `new_handle`, but after `break` at line 249 the local is dropped, firing VllmProcess::Drop which calls `child.start_kill()` on the freshly spawned process. The watchdog enters an infinite respawn→kill loop on first vLLM crash. The Arc<VllmProcess> in AppState is never updated.",
+        "MEDIUM: No graceful shutdown — HTTP server (server.rs:58 tokio::spawn) and watchdog loop (lib.rs:225) have no cancellation token or shutdown signal. In-flight requests and streaming responses are hard-killed on process exit. No drain period for the semaphore.",
+        "MEDIUM: Streaming billing is fragile — server.rs:480-494 extracts usage from the SSE stream, but if vLLM omits the usage chunk (format change, truncated stream, timeout), usage_tx is never sent, usage_rx returns Err, and billing settlement is silently skipped (line 539-541). Operator serves inference for free.",
+        "LOW: No nonce replay tracking — server.rs billing flow relies entirely on the on-chain contract to reject replayed SpendAuth nonces. If the contract's authorizeSpend doesn't revert on duplicate (commitment, nonce) tuples, the operator serves inference multiple times for one payment.",
+        "LOW: line_buf.replace_range(..n, \"\") at server.rs:502 inside a while loop is O(n²) per chunk with many newlines. Under high-throughput streaming with large chunks this becomes a CPU hotspot. Use drain or split_off pattern instead.",
+        "NITPICK: server.rs:554 and 599 use .expect() on Response::builder() — infallible with hardcoded valid inputs but violates the 'no .expect() in production paths' rule. Use .unwrap_or_else(|_| unreachable!()) or handle explicitly.",
+        "NITPICK: billing.rs:333 .expect(\"system clock before UNIX epoch\") — panics if system clock is misconfigured. Unlikely but not impossible in containerized environments with broken time sync."
+      ]
+    },
+    {
+      "name": "code_quality",
+      "score": 5,
+      "findings": []
+    }
+  ],
+  "avgScore": 5.666666666666667,
+  "threshold": 8
+}
