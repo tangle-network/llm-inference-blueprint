@@ -178,6 +178,7 @@ pub async fn start(
     let app = HttpRouter::new()
         .route("/v1/chat/completions", post(chat_completions))
         .route("/v1/models", get(list_models))
+        .route("/v1/operator", get(operator_info))
         .route("/health", get(health_check))
         .route("/health/gpu", get(gpu_health))
         .route("/metrics", get(metrics_handler))
@@ -966,6 +967,33 @@ async fn list_models(State(state): State<AppState>) -> Json<ModelList> {
             owned_by: "operator".to_string(),
         }],
     })
+}
+
+/// Operator info endpoint for discovery. Returns model, pricing, GPU caps, and endpoint.
+/// Frontends query this to build operator comparison grids.
+async fn operator_info(State(state): State<AppState>) -> Json<serde_json::Value> {
+    let gpu_info = health::detect_gpus().await.unwrap_or_default();
+    Json(serde_json::json!({
+        "operator": format!("{:#x}", state.operator_address),
+        "model": state.config.vllm.model,
+        "pricing": {
+            "price_per_input_token": state.config.billing.price_per_input_token,
+            "price_per_output_token": state.config.billing.price_per_output_token,
+            "currency": "tsUSD",
+        },
+        "gpu": {
+            "count": state.config.gpu.expected_gpu_count,
+            "min_vram_mib": state.config.gpu.min_vram_mib,
+            "model": state.config.gpu.gpu_model,
+            "detected": gpu_info,
+        },
+        "server": {
+            "max_concurrent_requests": state.config.server.max_concurrent_requests,
+            "max_context_length": state.config.vllm.max_model_len,
+        },
+        "billing_required": state.config.billing.billing_required,
+        "payment_token": state.config.billing.payment_token_address,
+    }))
 }
 
 async fn health_check(
