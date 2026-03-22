@@ -2,6 +2,7 @@
 pragma solidity ^0.8.26;
 
 import { Test } from "forge-std/Test.sol";
+import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import { InferenceBSM } from "../src/InferenceBSM.sol";
 import { BlueprintServiceManagerBase } from "tnt-core/BlueprintServiceManagerBase.sol";
 
@@ -47,7 +48,12 @@ contract InferenceBSMTest is Test {
 
     function setUp() public {
         tsUSD = new MockTsUSD();
-        bsm = new InferenceBSM(address(tsUSD));
+
+        // Deploy implementation + proxy
+        InferenceBSM impl = new InferenceBSM();
+        bytes memory initData = abi.encodeCall(InferenceBSM.initialize, (address(tsUSD)));
+        ERC1967Proxy proxy = new ERC1967Proxy(address(impl), initData);
+        bsm = InferenceBSM(payable(address(proxy)));
 
         // Initialize blueprint
         bsm.onBlueprintCreated(1, owner, tangleCore);

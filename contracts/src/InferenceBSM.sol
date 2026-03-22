@@ -2,13 +2,15 @@
 pragma solidity ^0.8.26;
 
 import { EnumerableSet } from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
+import { Initializable } from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import { UUPSUpgradeable } from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import { BlueprintServiceManagerBase } from "tnt-core/BlueprintServiceManagerBase.sol";
 
 /// @title InferenceBSM
 /// @notice Blueprint Service Manager for vLLM inference services.
 /// @dev Operators register with GPU capabilities. Services only accept tsUSD payment
 ///      (the ShieldedCredits wrapped token) for anonymous billing.
-contract InferenceBSM is BlueprintServiceManagerBase {
+contract InferenceBSM is Initializable, UUPSUpgradeable, BlueprintServiceManagerBase {
     using EnumerableSet for EnumerableSet.AddressSet;
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -57,7 +59,7 @@ contract InferenceBSM is BlueprintServiceManagerBase {
     // ═══════════════════════════════════════════════════════════════════════
 
     /// @notice The only accepted payment token (tsUSD -- shielded pool wrapped token)
-    address public immutable tsUSD;
+    address public tsUSD;
 
     /// @notice Minimum operator stake (in TNT)
     uint256 public constant MIN_OPERATOR_STAKE = 100 ether;
@@ -72,11 +74,18 @@ contract InferenceBSM is BlueprintServiceManagerBase {
     EnumerableSet.AddressSet private _operators;
 
     // ═══════════════════════════════════════════════════════════════════════
-    // CONSTRUCTOR
+    // INITIALIZATION
     // ═══════════════════════════════════════════════════════════════════════
 
+    /// @custom:oz-upgrades-unsafe-allow constructor
+    constructor() {
+        _disableInitializers();
+    }
+
+    /// @notice Initialize the contract (called once via proxy)
     /// @param _tsUSD The wrapped stablecoin accepted for payment
-    constructor(address _tsUSD) {
+    function initialize(address _tsUSD) external initializer {
+        __UUPSUpgradeable_init();
         tsUSD = _tsUSD;
     }
 
@@ -305,6 +314,13 @@ contract InferenceBSM is BlueprintServiceManagerBase {
 
         return (mc.pricePerInputToken, mc.pricePerOutputToken, caps.endpoint);
     }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // UPGRADES
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// @notice Only the blueprint owner can authorize upgrades
+    function _authorizeUpgrade(address) internal override onlyBlueprintOwner {}
 
     receive() external payable override {}
 }

@@ -2,6 +2,7 @@
 pragma solidity ^0.8.20;
 
 import {Script, console2} from "forge-std/Script.sol";
+import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {InferenceBSM} from "../src/InferenceBSM.sol";
 import {ShieldedCredits} from "../src/ShieldedCredits.sol";
 import {RLNSettlement} from "../src/RLNSettlement.sol";
@@ -33,15 +34,19 @@ contract Deploy is Script {
         RLNSettlement rln = new RLNSettlement();
         console2.log("RLNSettlement:", address(rln));
 
-        // 3. Deploy InferenceBSM
-        //    tsUSD is immutable — must be set at deploy time.
-        //    If tsUSD is address(0), deploy a mock for local testing.
+        // 3. Deploy InferenceBSM (UUPS proxy)
         if (tsUSD == address(0)) {
             console2.log("WARNING: TSUSD_ADDRESS not set, using address(1) as placeholder");
             tsUSD = address(1);
         }
-        InferenceBSM bsm = new InferenceBSM(tsUSD);
-        console2.log("InferenceBSM:", address(bsm));
+        InferenceBSM impl = new InferenceBSM();
+        ERC1967Proxy proxy = new ERC1967Proxy(
+            address(impl),
+            abi.encodeCall(InferenceBSM.initialize, (tsUSD))
+        );
+        InferenceBSM bsm = InferenceBSM(payable(address(proxy)));
+        console2.log("InferenceBSM impl:", address(impl));
+        console2.log("InferenceBSM proxy:", address(bsm));
 
         // 4. If Tangle core address provided, initialize BSM
         if (tangleCore != address(0)) {
@@ -66,7 +71,7 @@ contract Deploy is Script {
         console2.log("=== Deployment Summary ===");
         console2.log("ShieldedCredits:", address(credits));
         console2.log("RLNSettlement:  ", address(rln));
-        console2.log("InferenceBSM:   ", address(bsm));
+        console2.log("InferenceBSM:    ", address(bsm), "(proxy)");
         console2.log("tsUSD:          ", tsUSD);
     }
 }
