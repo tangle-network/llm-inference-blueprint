@@ -22,6 +22,8 @@ jobs:
             command: cargo clippy --workspace -- -D warnings
           - check: test
             command: cargo test --workspace
+          - check: audit
+            command: cargo install cargo-audit && cargo audit
 
     steps:
       - uses: actions/checkout@v4

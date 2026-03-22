@@ -62,19 +62,18 @@ impl BillingClient {
         let signer: PrivateKeySigner = config.tangle.operator_key.parse()?;
         let operator_address = signer.address();
 
-        // Warn about plaintext key storage. In production, operators should use
-        // a KMS, hardware signer, or encrypted keystore instead of raw hex.
-        if std::env::var("VLLM_OP_TANGLE__OPERATOR_KEY").is_ok() {
-            tracing::warn!(
-                "operator_key loaded from environment variable — \
-                 use a KMS or encrypted keystore in production"
-            );
-        } else {
-            tracing::warn!(
-                "operator_key loaded from plaintext config — \
-                 use a KMS or encrypted keystore in production"
+        // Block plaintext keys in production mode.
+        if std::env::var("PRODUCTION").unwrap_or_default() == "1" {
+            anyhow::bail!(
+                "PRODUCTION=1 but operator_key is loaded from plaintext. \
+                 Use a KMS (AWS KMS, HashiCorp Vault) or encrypted keystore. \
+                 Unset PRODUCTION to run in dev mode."
             );
         }
+        tracing::warn!(
+            "operator_key loaded from plaintext — \
+             use a KMS or encrypted keystore in production (set PRODUCTION=1 to enforce)"
+        );
 
         let wallet = EthereumWallet::from(signer);
         let shielded_credits: Address = config.tangle.shielded_credits.parse()?;
