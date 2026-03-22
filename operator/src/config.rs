@@ -215,6 +215,10 @@ pub struct GpuConfig {
     /// Minimum required VRAM per GPU in MiB
     pub min_vram_mib: u32,
 
+    /// GPU model name (e.g. "NVIDIA A100", "RTX 4090") for on-chain registration
+    #[serde(default)]
+    pub gpu_model: Option<String>,
+
     /// GPU monitoring interval in seconds
     #[serde(default = "default_monitor_interval")]
     pub monitor_interval_secs: u64,

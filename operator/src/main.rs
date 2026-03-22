@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use alloy_sol_types::SolValue;
 use blueprint_sdk::contexts::tangle::TangleClientContext;
 use blueprint_sdk::runner::config::BlueprintEnvironment;
 use blueprint_sdk::runner::tangle::config::TangleConfig;
@@ -16,27 +17,32 @@ fn setup_log() {
     fmt().with_env_filter(filter).init();
 }
 
+/// Build ABI-encoded registration payload for InferenceBSM.onRegister.
+/// Format: abi.encode(string model, uint32 gpuCount, uint32 totalVramMib, string gpuModel, string endpoint)
+fn registration_payload(config: &OperatorConfig) -> Vec<u8> {
+    let gpu_count = config.gpu.expected_gpu_count;
+    let total_vram = config.gpu.min_vram_mib;
+    let gpu_model = config
+        .gpu
+        .gpu_model
+        .clone()
+        .unwrap_or_else(|| "unknown".to_string());
+    let endpoint = format!("http://{}:{}", config.server.host, config.server.port);
+
+    (
+        config.vllm.model.clone(),
+        gpu_count,
+        total_vram,
+        gpu_model,
+        endpoint,
+    )
+        .abi_encode()
+}
+
 #[tokio::main]
 #[allow(clippy::result_large_err)]
 async fn main() -> Result<(), blueprint_sdk::Error> {
     setup_log();
-
-    // Check GPU availability (non-fatal)
-    match health::detect_gpus().await {
-        Ok(gpus) => {
-            tracing::info!(count = gpus.len(), "detected GPUs");
-            for gpu in &gpus {
-                tracing::info!(
-                    name = %gpu.name,
-                    vram_mib = gpu.memory_total_mib,
-                    "GPU"
-                );
-            }
-        }
-        Err(e) => {
-            tracing::warn!(error = %e, "GPU detection failed — running in CPU mode");
-        }
-    }
 
     // Load operator config
     let config = OperatorConfig::load(None)
@@ -45,6 +51,37 @@ async fn main() -> Result<(), blueprint_sdk::Error> {
 
     // Load blueprint environment
     let env = BlueprintEnvironment::load()?;
+
+    // Registration mode: emit registration inputs and exit
+    if env.registration_mode() {
+        let payload = registration_payload(&config);
+        let output_path = env.registration_output_path();
+        if let Some(parent) = output_path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| blueprint_sdk::Error::Other(e.to_string()))?;
+        }
+        std::fs::write(&output_path, &payload)
+            .map_err(|e| blueprint_sdk::Error::Other(e.to_string()))?;
+        tracing::info!(
+            path = %output_path.display(),
+            model = %config.vllm.model,
+            "Registration payload saved"
+        );
+        return Ok(());
+    }
+
+    // Check GPU availability (non-fatal)
+    match health::detect_gpus().await {
+        Ok(gpus) => {
+            tracing::info!(count = gpus.len(), "detected GPUs");
+            for gpu in &gpus {
+                tracing::info!(name = %gpu.name, vram_mib = gpu.memory_total_mib, "GPU");
+            }
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "GPU detection failed — running in CPU mode");
+        }
+    }
 
     // Get Tangle client
     let tangle_client = env
@@ -60,10 +97,8 @@ async fn main() -> Result<(), blueprint_sdk::Error> {
         .service_id
         .ok_or_else(|| blueprint_sdk::Error::Other("No service ID configured".to_string()))?;
 
-    // Producer: polls for JobSubmitted events
+    // Producer + Consumer
     let tangle_producer = TangleProducer::new(tangle_client.clone(), service_id);
-
-    // Consumer: submits results via submitResult
     let tangle_consumer = TangleConsumer::new(tangle_client.clone());
 
     // Background service: vLLM subprocess + HTTP server
