@@ -1,0 +1,31 @@
+# Operator pricing configuration for vLLM inference blueprint
+#
+# This file is read by the BPM pricing engine to generate RFQ quotes.
+# Operators customize per-model pricing based on their hardware costs.
+#
+# Format: [service_id] section with job_index = price_in_wei pairs.
+# The pricing engine signs EIP-712 quotes with these prices when
+# consumers call GetJobPrice(service_id, job_index).
+
+# Default resource pricing for service quotes
+[default]
+resources = [
+  # GPU is the primary cost driver for inference
+  { kind = "GPU", count = 1, price_per_unit_rate = 0.005 },
+  # CPU for tokenization and pre/post processing
+  { kind = "CPU", count = 4, price_per_unit_rate = 0.001 },
+  # Memory for model weights and KV cache
+  { kind = "MemoryMB", count = 24576, price_per_unit_rate = 0.00005 },
+  # Network for serving responses
+  { kind = "NetworkEgressMB", count = 1024, price_per_unit_rate = 0.00003 },
+]
+
+# Per-job pricing (job_index = price_in_wei)
+# Job 0 = INFERENCE_JOB (chat completions)
+#
+# Pricing strategy: base cost per inference call.
+# For per-token pricing, the operator's billing.rs calculates:
+#   cost = (input_tokens * price_per_input_token) + (output_tokens * price_per_output_token)
+# This job price is the minimum/base fee per request.
+[0]
+0 = "1000000000000000"    # Job 0 (inference): 0.001 ETH base fee per request
