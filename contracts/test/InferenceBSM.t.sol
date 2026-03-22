@@ -3,6 +3,7 @@ pragma solidity ^0.8.26;
 
 import { Test } from "forge-std/Test.sol";
 import { InferenceBSM } from "../src/InferenceBSM.sol";
+import { BlueprintServiceManagerBase } from "tnt-core/BlueprintServiceManagerBase.sol";
 
 contract MockTsUSD {
     mapping(address => uint256) public balanceOf;
@@ -72,7 +73,7 @@ contract InferenceBSMTest is Test {
     }
 
     function test_cannotReinitialize() public {
-        vm.expectRevert(InferenceBSM.AlreadyInitialized.selector);
+        vm.expectRevert(BlueprintServiceManagerBase.AlreadyInitialized.selector);
         bsm.onBlueprintCreated(2, owner, tangleCore);
     }
 
@@ -90,7 +91,7 @@ contract InferenceBSMTest is Test {
     function test_configureModel_onlyOwner() public {
         vm.prank(user);
         vm.expectRevert(
-            abi.encodeWithSelector(InferenceBSM.OnlyBlueprintOwnerAllowed.selector, user, owner)
+            abi.encodeWithSelector(BlueprintServiceManagerBase.OnlyBlueprintOwnerAllowed.selector, user, owner)
         );
         bsm.configureModel("test-model", 4096, 1, 1, 8000);
     }
@@ -159,7 +160,7 @@ contract InferenceBSMTest is Test {
         );
 
         vm.prank(user);
-        vm.expectRevert(abi.encodeWithSelector(InferenceBSM.OnlyTangleAllowed.selector, user, tangleCore));
+        vm.expectRevert(abi.encodeWithSelector(BlueprintServiceManagerBase.OnlyTangleAllowed.selector, user, tangleCore));
         bsm.onRegister(operator1, regData);
     }
 
