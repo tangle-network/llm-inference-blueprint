@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
-use std::fmt;
-use std::path::PathBuf;
+use blueprint_std::fmt;
+use blueprint_std::path::PathBuf;
+
+use crate::qos::QoSConfig;
 
 /// Top-level operator configuration.
 #[derive(Clone, Serialize, Deserialize)]
@@ -19,6 +21,10 @@ pub struct OperatorConfig {
 
     /// GPU configuration
     pub gpu: GpuConfig,
+
+    /// QoS heartbeat configuration (optional — disabled by default)
+    #[serde(default)]
+    pub qos: Option<QoSConfig>,
 
     /// RLN Mode configuration (optional — enables RLN payment path)
     #[serde(default)]

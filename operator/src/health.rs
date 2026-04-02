@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::process::Command;
+use blueprint_std::process::Command;
 
 /// Information about a single GPU.
 #[derive(Debug, Clone, Serialize, Deserialize)]

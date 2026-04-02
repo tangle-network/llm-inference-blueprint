@@ -46,22 +46,27 @@ fn test_config(vllm_port: u16) -> OperatorConfig {
             max_per_account_requests: 0,
         },
         billing: BillingConfig {
+            required: false,
             price_per_input_token: 1,
             price_per_output_token: 2,
             max_spend_per_request: 1_000_000,
             min_credit_balance: 1000,
-            billing_required: false, // Disabled in tests to avoid needing real spend_auth
+            billing_required: false,
             min_charge_amount: 0,
             claim_max_retries: 3,
             clock_skew_tolerance_secs: 30,
             max_gas_price_gwei: 0,
             nonce_store_path: None,
+            payment_token_address: None,
         },
         gpu: GpuConfig {
             expected_gpu_count: 0,
             min_vram_mib: 0,
             monitor_interval_secs: 30,
+            gpu_model: None,
         },
+        qos: None,
+        rln: None,
     }
 }
 
@@ -69,26 +74,26 @@ fn test_config(vllm_port: u16) -> OperatorConfig {
 
 #[tokio::test]
 async fn test_metrics_gather_produces_valid_output() {
-    let mut guard = vllm_inference::metrics::RequestGuard::new();
+    let mut guard = vllm_inference::metrics::RequestGuard::new("test-model");
     guard.set_tokens(1, 1);
     guard.set_success();
     drop(guard);
 
     let output = vllm_inference::metrics::gather();
     assert!(
-        output.contains("vllm_operator_active_requests"),
+        output.contains("tangle_operator_active_requests"),
         "missing active_requests metric"
     );
     assert!(
-        output.contains("vllm_operator_request_count"),
-        "missing request_count metric"
+        output.contains("tangle_operator_requests_total"),
+        "missing requests_total metric"
     );
     assert!(
-        output.contains("vllm_operator_request_duration_seconds"),
-        "missing request_duration_seconds metric"
+        output.contains("tangle_operator_request_duration_ms"),
+        "missing request_duration_ms metric"
     );
     assert!(
-        output.contains("vllm_operator_tokens_total"),
+        output.contains("tangle_operator_tokens_total"),
         "missing tokens_total metric"
     );
 }
@@ -99,10 +104,10 @@ async fn test_request_guard_tracks_active_requests() {
 
     let initial = ACTIVE_REQUESTS.get();
 
-    let guard1 = RequestGuard::new();
+    let guard1 = RequestGuard::new("test-model");
     assert!(ACTIVE_REQUESTS.get() >= initial + 1.0);
 
-    let guard2 = RequestGuard::new();
+    let guard2 = RequestGuard::new("test-model");
     assert!(ACTIVE_REQUESTS.get() >= initial + 2.0);
 
     drop(guard1);
@@ -113,20 +118,20 @@ async fn test_request_guard_tracks_active_requests() {
 async fn test_request_guard_records_tokens_on_drop() {
     use vllm_inference::metrics::{RequestGuard, TOKENS_TOTAL};
 
-    let prompt_before = TOKENS_TOTAL.with_label_values(&["prompt"]).get();
-    let completion_before = TOKENS_TOTAL.with_label_values(&["completion"]).get();
+    let prompt_before = TOKENS_TOTAL.with_label_values(&["test-model", "prompt"]).get();
+    let completion_before = TOKENS_TOTAL.with_label_values(&["test-model", "completion"]).get();
 
-    let mut guard = RequestGuard::new();
+    let mut guard = RequestGuard::new("test-model");
     guard.set_tokens(100, 50);
     guard.set_success();
     drop(guard);
 
     assert!(
-        TOKENS_TOTAL.with_label_values(&["prompt"]).get() >= prompt_before + 100,
+        TOKENS_TOTAL.with_label_values(&["test-model", "prompt"]).get() >= prompt_before + 100,
         "prompt tokens should have increased by at least 100"
     );
     assert!(
-        TOKENS_TOTAL.with_label_values(&["completion"]).get() >= completion_before + 50,
+        TOKENS_TOTAL.with_label_values(&["test-model", "completion"]).get() >= completion_before + 50,
         "completion tokens should have increased by at least 50"
     );
 }
@@ -135,13 +140,13 @@ async fn test_request_guard_records_tokens_on_drop() {
 async fn test_request_guard_defaults_to_error() {
     use vllm_inference::metrics::{RequestGuard, REQUEST_COUNT};
 
-    let error_before = REQUEST_COUNT.with_label_values(&["error"]).get();
+    let error_before = REQUEST_COUNT.with_label_values(&["test-model", "error"]).get();
 
-    let guard = RequestGuard::new();
+    let guard = RequestGuard::new("test-model");
     drop(guard);
 
     assert!(
-        REQUEST_COUNT.with_label_values(&["error"]).get() >= error_before + 1,
+        REQUEST_COUNT.with_label_values(&["test-model", "error"]).get() >= error_before + 1,
         "error count should have increased by at least 1"
     );
 }
@@ -150,14 +155,14 @@ async fn test_request_guard_defaults_to_error() {
 async fn test_request_guard_records_success() {
     use vllm_inference::metrics::{RequestGuard, REQUEST_COUNT};
 
-    let success_before = REQUEST_COUNT.with_label_values(&["success"]).get();
+    let success_before = REQUEST_COUNT.with_label_values(&["test-model", "success"]).get();
 
-    let mut guard = RequestGuard::new();
+    let mut guard = RequestGuard::new("test-model");
     guard.set_success();
     drop(guard);
 
     assert!(
-        REQUEST_COUNT.with_label_values(&["success"]).get() >= success_before + 1,
+        REQUEST_COUNT.with_label_values(&["test-model", "success"]).get() >= success_before + 1,
         "success count should have increased by at least 1"
     );
 }

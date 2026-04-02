@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use blueprint_std::sync::Arc;
 
 use alloy_sol_types::SolValue;
 use blueprint_sdk::contexts::tangle::TangleClientContext;
@@ -100,6 +100,26 @@ async fn main() -> Result<(), blueprint_sdk::Error> {
     // Producer + Consumer
     let tangle_producer = TangleProducer::new(tangle_client.clone(), service_id);
     let tangle_consumer = TangleConsumer::new(tangle_client.clone());
+
+    // ── QoS heartbeat ────────────────────────────────────────────────
+    let qos_enabled = config
+        .qos
+        .as_ref()
+        .map(|q| q.heartbeat_interval_secs > 0)
+        .unwrap_or(false);
+    if qos_enabled {
+        match vllm_inference::qos::start_heartbeat(config.clone()).await {
+            Ok(_handle) => {
+                let interval = config.qos.as_ref().unwrap().heartbeat_interval_secs;
+                tracing::info!(interval_secs = interval, "QoS heartbeat started");
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "QoS heartbeat failed to start (disabled)");
+            }
+        }
+    } else {
+        tracing::info!("QoS heartbeat disabled");
+    }
 
     // Background service: vLLM subprocess + HTTP server
     let inference_server = InferenceServer {

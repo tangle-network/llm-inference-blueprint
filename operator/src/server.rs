@@ -1,7 +1,7 @@
-use std::collections::HashMap;
-use std::path::PathBuf;
-use std::sync::{Arc, RwLock};
-use std::time::Duration;
+use blueprint_std::collections::HashMap;
+use blueprint_std::path::PathBuf;
+use blueprint_std::sync::{Arc, RwLock};
+use blueprint_std::time::Duration;
 
 use alloy::primitives::Address;
 use axum::{
@@ -445,7 +445,11 @@ async fn chat_completions(
     headers: HeaderMap,
     Json(mut req): Json<ChatCompletionRequest>,
 ) -> Response {
-    let metrics_guard = RequestGuard::new();
+    let model_name = req
+        .model
+        .as_deref()
+        .unwrap_or(&state.config.vllm.model);
+    let metrics_guard = RequestGuard::new(model_name);
 
     // 1. Acquire semaphore permit
     let permit: OwnedSemaphorePermit = match state.semaphore.clone().try_acquire_owned() {
