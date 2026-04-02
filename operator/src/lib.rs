@@ -2,6 +2,7 @@ pub mod billing;
 pub mod config;
 pub mod health;
 pub mod metrics;
+pub mod qos;
 pub mod vllm;
 
 pub mod server;
@@ -93,7 +94,10 @@ pub fn init_for_testing(base_url: &str, model: &str) {
 // --- Router ---
 
 pub fn router() -> Router {
-    Router::new().route(INFERENCE_JOB, run_inference.layer(TangleLayer))
+    Router::new().route(
+        INFERENCE_JOB,
+        run_inference.layer(TangleLayer).layer(blueprint_sdk::tee::TeeLayer::new()),
+    )
 }
 
 // --- Job handler ---
