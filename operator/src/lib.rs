@@ -7,9 +7,9 @@ pub mod vllm;
 
 pub mod server;
 
-use blueprint_std::collections::HashMap;
-use blueprint_std::sync::{Arc, OnceLock, RwLock};
-use blueprint_std::time::Duration;
+use blueprint_sdk::std::collections::HashMap;
+use blueprint_sdk::std::sync::{Arc, OnceLock, RwLock};
+use blueprint_sdk::std::time::Duration;
 
 use alloy_sol_types::sol;
 use blueprint_sdk::macros::debug_job;

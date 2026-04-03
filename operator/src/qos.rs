@@ -7,8 +7,8 @@
 //! 1. Liveness proof — the chain knows this operator is alive
 //! 2. Metric submission — latency, throughput, error rates feed into reputation
 
-use blueprint_std::sync::Arc;
-use blueprint_std::time::Duration;
+use blueprint_sdk::std::sync::Arc;
+use blueprint_sdk::std::time::Duration;
 
 use alloy::{
     network::EthereumWallet,

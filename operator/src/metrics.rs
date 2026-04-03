@@ -5,9 +5,9 @@
 //! 2. On-chain MetricPair[] — submitted via QoS for reputation/slashing
 //! 3. /health JSON — consumed by platform health checker for dashboard display
 
-use blueprint_std::sync::atomic::{AtomicU64, Ordering};
-use blueprint_std::sync::LazyLock;
-use blueprint_std::time::Instant;
+use blueprint_sdk::std::sync::atomic::{AtomicU64, Ordering};
+use blueprint_sdk::std::sync::LazyLock;
+use blueprint_sdk::std::time::Instant;
 
 use prometheus::{
     Encoder, Gauge, GaugeVec, HistogramOpts, HistogramVec, IntCounter, IntCounterVec, Opts,

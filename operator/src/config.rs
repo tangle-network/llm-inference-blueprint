@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
-use blueprint_std::fmt;
-use blueprint_std::path::PathBuf;
+use blueprint_sdk::std::fmt;
+use blueprint_sdk::std::path::PathBuf;
 
 use crate::qos::QoSConfig;
 
