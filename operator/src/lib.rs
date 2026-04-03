@@ -100,6 +100,34 @@ pub fn router() -> Router {
     )
 }
 
+/// Direct inference call — same logic as run_inference but without TangleArg.
+/// Used for testing without the Tangle context.
+pub async fn run_inference_direct(request: &InferenceRequest) -> Result<InferenceResult, RunnerError> {
+    let endpoint = VLLM_ENDPOINT.get().ok_or_else(|| {
+        RunnerError::Other("vLLM endpoint not registered".into())
+    })?;
+
+    let temperature = request.temperature as f32 / 1000.0;
+    let vllm_body = serde_json::json!({
+        "model": endpoint.model,
+        "messages": [{"role": "user", "content": request.prompt}],
+        "max_tokens": request.maxTokens,
+        "temperature": temperature,
+        "stream": false,
+    });
+
+    let resp = endpoint.client.post(&endpoint.url).json(&vllm_body).send().await
+        .map_err(|e| RunnerError::Other(format!("vLLM request failed: {e}").into()))?;
+    let body: serde_json::Value = resp.json().await
+        .map_err(|e| RunnerError::Other(format!("vLLM parse failed: {e}").into()))?;
+
+    Ok(InferenceResult {
+        text: body["choices"][0]["message"]["content"].as_str().unwrap_or("").to_string(),
+        promptTokens: body["usage"]["prompt_tokens"].as_u64().unwrap_or(0) as u32,
+        completionTokens: body["usage"]["completion_tokens"].as_u64().unwrap_or(0) as u32,
+    })
+}
+
 // --- Job handler ---
 
 /// Handle an inference job submitted on-chain.
