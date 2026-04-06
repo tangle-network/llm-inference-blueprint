@@ -2,20 +2,19 @@
 
 ## Project Overview
 
-vLLM Inference Blueprint for Tangle Network. Operators serve LLM inference via vLLM, users pay anonymously through ShieldedCredits.
+LLM Inference Blueprint for Tangle Network. Operators serve LLM inference via vLLM, users pay anonymously through ShieldedCredits.
 
 ## Architecture
 
-Uses the Tangle Blueprint SDK (`blueprint-sdk` crate) with the canonical lib+bin pattern.
+Uses the Tangle Blueprint SDK (`blueprint-sdk` crate) with the canonical lib+bin pattern, and depends on [`tangle-inference-core`](../tangle-inference-core/) for all shared inference-operator infrastructure (billing, metrics, health, nonce store, spend-auth validation, x402 payment headers, AppState builder).
 
 - **contracts/**: Solidity BSM (InferenceBSM) -- validates operator registration (GPU caps), restricts payment to tsUSD, stores model metadata
-- **operator/src/lib.rs**: Library crate -- `router()`, `run_inference` job handler (TangleArg/TangleResult), `InferenceServer` BackgroundService, sol! ABI types
+- **operator/src/lib.rs**: Library crate -- `router()`, `run_inference` job handler (TangleArg/TangleResult), `InferenceServer` BackgroundService, sol! ABI types, re-exports from `tangle-inference-core`
 - **operator/src/main.rs**: Binary crate -- BlueprintRunner wiring only (BlueprintEnvironment, TangleProducer, TangleConsumer)
-- **operator/src/server.rs**: Axum HTTP server with OpenAI-compatible endpoints (runs as BackgroundService)
-- **operator/src/billing.rs**: ShieldedCredits on-chain billing (authorizeSpend/claimPayment) and off-chain EIP-712 SpendAuth signature verification
+- **operator/src/server.rs**: vLLM-specific Axum handlers + `VllmBackend` (attached to the shared `AppState` via `AppStateBuilder`). Nonce store, spend-auth validation, x402 headers, metrics — all imported from `tangle-inference-core`.
 - **operator/src/vllm.rs**: vLLM subprocess management (spawn, health check, proxy)
-- **operator/src/config.rs**: Operator config structs (vLLM, billing, GPU, server)
-- **operator/src/health.rs**: GPU detection via nvidia-smi
+- **operator/src/config.rs**: Top-level `OperatorConfig` composing `tangle-inference-core::{TangleConfig, ServerConfig, BillingConfig, GpuConfig}` with a vllm-specific `VllmConfig` (which carries `price_per_input_token`/`price_per_output_token`)
+- **operator/src/qos.rs**: QoS heartbeat loop (calls `tangle_inference_core::metrics::on_chain_metrics`)
 - **sdk/**: TypeScript client -- signs SpendAuth, discovers operators, sends inference requests
 
 ## Build Commands
@@ -27,7 +26,7 @@ cd contracts && forge build && forge test
 
 ### Operator
 ```bash
-cargo build -p vllm-inference
+cargo build -p llm-inference
 ```
 
 ### SDK

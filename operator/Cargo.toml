@@ -1,15 +1,15 @@
 [package]
-name = "vllm-inference"
+name = "llm-inference"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [lib]
-name = "vllm_inference"
+name = "llm_inference"
 path = "src/lib.rs"
 
 [[bin]]
-name = "vllm-operator"
+name = "llm-operator"
 path = "src/main.rs"
 
 # Minimal HTTP-only operator for E2E tests — skips BlueprintRunner and
@@ -32,6 +32,9 @@ anyhow = { workspace = true }
 thiserror = { workspace = true }
 hex = { workspace = true }
 k256 = { workspace = true }
+
+# Shared inference operator infrastructure (billing, metrics, health, server helpers)
+tangle-inference-core = { path = "../../tangle-inference-core" }
 
 # Web framework (for OpenAI-compatible HTTP server)
 axum = { version = "0.7", features = ["json", "macros"] }

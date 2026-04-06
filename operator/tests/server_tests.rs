@@ -1,5 +1,4 @@
-use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 use tokio::sync::Semaphore;
 use tokio::task::JoinHandle;
@@ -8,9 +7,11 @@ use wiremock::{
     Mock, MockServer, ResponseTemplate,
 };
 
-use vllm_inference::config::{
+use llm_inference::config::{
     BillingConfig, GpuConfig, OperatorConfig, ServerConfig, TangleConfig, VllmConfig,
 };
+use llm_inference::server::VllmBackend;
+use llm_inference::{AppStateBuilder, BillingClient, NonceStore};
 
 fn test_config(vllm_port: u16) -> OperatorConfig {
     OperatorConfig {
@@ -18,7 +19,6 @@ fn test_config(vllm_port: u16) -> OperatorConfig {
             rpc_url: "http://localhost:8545".into(),
             chain_id: 31337,
             operator_key: "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80".into(),
-            tangle_core: "0x0000000000000000000000000000000000000000".into(),
             shielded_credits: "0x0000000000000000000000000000000000000000".into(),
             blueprint_id: 1,
             service_id: Some(1),
@@ -29,6 +29,8 @@ fn test_config(vllm_port: u16) -> OperatorConfig {
             host: "127.0.0.1".into(),
             port: vllm_port,
             tensor_parallel_size: 1,
+            price_per_input_token: 1,
+            price_per_output_token: 2,
             extra_args: vec![],
             command: "python3 -m vllm.entrypoints.openai.api_server".into(),
             hf_token: None,
@@ -46,12 +48,9 @@ fn test_config(vllm_port: u16) -> OperatorConfig {
             max_per_account_requests: 0,
         },
         billing: BillingConfig {
-            required: false,
-            price_per_input_token: 1,
-            price_per_output_token: 2,
+            billing_required: false,
             max_spend_per_request: 1_000_000,
             min_credit_balance: 1000,
-            billing_required: false,
             min_charge_amount: 0,
             claim_max_retries: 3,
             clock_skew_tolerance_secs: 30,
@@ -74,12 +73,12 @@ fn test_config(vllm_port: u16) -> OperatorConfig {
 
 #[tokio::test]
 async fn test_metrics_gather_produces_valid_output() {
-    let mut guard = vllm_inference::metrics::RequestGuard::new("test-model");
+    let mut guard = llm_inference::metrics::RequestGuard::new("test-model");
     guard.set_tokens(1, 1);
     guard.set_success();
     drop(guard);
 
-    let output = vllm_inference::metrics::gather();
+    let output = llm_inference::metrics::gather();
     assert!(
         output.contains("tangle_operator_active_requests"),
         "missing active_requests metric"
@@ -100,7 +99,7 @@ async fn test_metrics_gather_produces_valid_output() {
 
 #[tokio::test]
 async fn test_request_guard_tracks_active_requests() {
-    use vllm_inference::metrics::{RequestGuard, ACTIVE_REQUESTS};
+    use llm_inference::metrics::{RequestGuard, ACTIVE_REQUESTS};
 
     let initial = ACTIVE_REQUESTS.get();
 
@@ -116,7 +115,7 @@ async fn test_request_guard_tracks_active_requests() {
 
 #[tokio::test]
 async fn test_request_guard_records_tokens_on_drop() {
-    use vllm_inference::metrics::{RequestGuard, TOKENS_TOTAL};
+    use llm_inference::metrics::{RequestGuard, TOKENS_TOTAL};
 
     let prompt_before = TOKENS_TOTAL.with_label_values(&["test-model", "prompt"]).get();
     let completion_before = TOKENS_TOTAL.with_label_values(&["test-model", "completion"]).get();
@@ -138,7 +137,7 @@ async fn test_request_guard_records_tokens_on_drop() {
 
 #[tokio::test]
 async fn test_request_guard_defaults_to_error() {
-    use vllm_inference::metrics::{RequestGuard, REQUEST_COUNT};
+    use llm_inference::metrics::{RequestGuard, REQUEST_COUNT};
 
     let error_before = REQUEST_COUNT.with_label_values(&["test-model", "error"]).get();
 
@@ -153,7 +152,7 @@ async fn test_request_guard_defaults_to_error() {
 
 #[tokio::test]
 async fn test_request_guard_records_success() {
-    use vllm_inference::metrics::{RequestGuard, REQUEST_COUNT};
+    use llm_inference::metrics::{RequestGuard, REQUEST_COUNT};
 
     let success_before = REQUEST_COUNT.with_label_values(&["test-model", "success"]).get();
 
@@ -205,12 +204,11 @@ async fn test_semaphore_zero_config_means_unlimited() {
 #[tokio::test]
 async fn test_billing_calculate_cost() {
     let config = Arc::new(test_config(8000));
-    let billing = vllm_inference::billing::BillingClient::new(config)
-        .await
-        .unwrap();
+    let vllm = Arc::new(llm_inference::vllm::VllmProcess::connect(config.clone()).unwrap());
+    let backend = VllmBackend::new(config, vllm);
 
     // price_per_input_token = 1, price_per_output_token = 2
-    let cost = billing.calculate_cost(100, 50);
+    let cost = backend.calculate_cost(100, 50);
     assert_eq!(cost, 100 * 1 + 50 * 2); // 200
 }
 
@@ -353,6 +351,26 @@ fn free_port() -> u16 {
         .port()
 }
 
+async fn build_test_state(config: Arc<OperatorConfig>) -> llm_inference::AppState {
+    let vllm = Arc::new(llm_inference::vllm::VllmProcess::connect(config.clone()).unwrap());
+    let billing = Arc::new(BillingClient::new(&config.tangle, &config.billing).unwrap());
+    let operator_address = billing.operator_address();
+    let nonce_store = Arc::new(NonceStore::load(None));
+    let backend = VllmBackend::new(config.clone(), vllm);
+
+    AppStateBuilder::new()
+        .billing(billing)
+        .nonce_store(nonce_store)
+        .server_config(Arc::new(config.server.clone()))
+        .billing_config(Arc::new(config.billing.clone()))
+        .tangle_config(Arc::new(config.tangle.clone()))
+        .operator_address(operator_address)
+        .max_concurrent(64)
+        .backend(backend)
+        .build()
+        .unwrap()
+}
+
 /// Returns (server_port, _guard) — caller must hold _guard to keep the server alive.
 async fn start_test_server(
     vllm_port: u16,
@@ -363,27 +381,10 @@ async fn start_test_server(
     config.server.host = "127.0.0.1".into();
     let config = Arc::new(config);
 
-    let vllm = Arc::new(vllm_inference::vllm::VllmProcess::connect(config.clone()).unwrap());
-    let billing = Arc::new(
-        vllm_inference::billing::BillingClient::new(config.clone())
-            .await
-            .unwrap(),
-    );
-    let operator_address = billing.operator_address();
-    let semaphore = Arc::new(Semaphore::new(64));
+    let state = build_test_state(config).await;
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 
-    let state = vllm_inference::server::AppState {
-        config,
-        vllm,
-        billing,
-        semaphore,
-        nonce_store: Arc::new(vllm_inference::server::NonceStore::load(None)),
-        active_per_account: Arc::new(RwLock::new(HashMap::new())),
-        operator_address,
-    };
-
-    let handle = vllm_inference::server::start(state, shutdown_rx)
+    let handle = llm_inference::server::start(state, shutdown_rx)
         .await
         .unwrap();
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -402,27 +403,10 @@ async fn start_billing_required_server(
     config.billing.billing_required = true;
     let config = Arc::new(config);
 
-    let vllm = Arc::new(vllm_inference::vllm::VllmProcess::connect(config.clone()).unwrap());
-    let billing = Arc::new(
-        vllm_inference::billing::BillingClient::new(config.clone())
-            .await
-            .unwrap(),
-    );
-    let operator_address = billing.operator_address();
-    let semaphore = Arc::new(Semaphore::new(64));
+    let state = build_test_state(config).await;
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 
-    let state = vllm_inference::server::AppState {
-        config,
-        vllm,
-        billing,
-        semaphore,
-        nonce_store: Arc::new(vllm_inference::server::NonceStore::load(None)),
-        active_per_account: Arc::new(RwLock::new(HashMap::new())),
-        operator_address,
-    };
-
-    let handle = vllm_inference::server::start(state, shutdown_rx)
+    let handle = llm_inference::server::start(state, shutdown_rx)
         .await
         .unwrap();
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -629,16 +613,19 @@ async fn test_stream_field_defaults_to_false() {
 
 // ─── Billing Settlement Tests ────────────────────────────────────────────
 
+fn test_backend(config: Arc<OperatorConfig>) -> VllmBackend {
+    let vllm = Arc::new(llm_inference::vllm::VllmProcess::connect(config.clone()).unwrap());
+    VllmBackend::new(config, vllm)
+}
+
 #[tokio::test]
 async fn test_billing_actual_cost_less_than_preauth() {
     let config = Arc::new(test_config(8000));
-    let billing = vllm_inference::billing::BillingClient::new(config)
-        .await
-        .unwrap();
+    let backend = test_backend(config);
 
     // price_per_input = 1, price_per_output = 2
     // 10 input + 5 output = 10*1 + 5*2 = 20
-    let actual_cost = billing.calculate_cost(10, 5);
+    let actual_cost = backend.calculate_cost(10, 5);
     assert_eq!(actual_cost, 20);
 
     // Pre-auth ceiling was 1000 — charge_amount should be min(20, 1000) = 20
@@ -653,13 +640,11 @@ async fn test_billing_actual_cost_less_than_preauth() {
 #[tokio::test]
 async fn test_billing_actual_cost_exceeds_preauth_cap() {
     let config = Arc::new(test_config(8000));
-    let billing = vllm_inference::billing::BillingClient::new(config)
-        .await
-        .unwrap();
+    let backend = test_backend(config);
 
     // price_per_input = 1, price_per_output = 2
     // 500 input + 300 output = 500 + 600 = 1100
-    let actual_cost = billing.calculate_cost(500, 300);
+    let actual_cost = backend.calculate_cost(500, 300);
     assert_eq!(actual_cost, 1100);
 
     // Pre-auth ceiling was 100 — charge_amount should be min(1100, 100) = 100
@@ -674,11 +659,9 @@ async fn test_billing_actual_cost_exceeds_preauth_cap() {
 #[tokio::test]
 async fn test_billing_zero_usage_yields_zero_charge() {
     let config = Arc::new(test_config(8000));
-    let billing = vllm_inference::billing::BillingClient::new(config)
-        .await
-        .unwrap();
+    let backend = test_backend(config);
 
-    let actual_cost = billing.calculate_cost(0, 0);
+    let actual_cost = backend.calculate_cost(0, 0);
     assert_eq!(actual_cost, 0);
 
     let preauth_amount: u64 = 500;

@@ -1,14 +1,24 @@
-pub mod billing;
 pub mod config;
-pub mod health;
-pub mod metrics;
 pub mod qos;
+pub mod server;
 pub mod vllm;
 
-pub mod server;
+// Re-export shared infrastructure so downstream crates can `use llm_inference::*`.
+pub use tangle_inference_core::{
+    detect_gpus, parse_nvidia_smi_output, AppState, AppStateBuilder, BillingClient, CostModel,
+    CostParams, GpuInfo, NonceStore, PerTokenCostModel, RequestGuard, SpendAuthPayload,
+};
+pub use tangle_inference_core::server::{
+    error_response, extract_x402_spend_auth, payment_required, settle_billing,
+    validate_spend_auth,
+};
+// Re-export metrics module for tests/downstream use.
+pub use tangle_inference_core::metrics;
+// Alias billing module path for downstream callers that imported
+// `llm_inference::billing::BillingClient` before the refactor.
+pub use tangle_inference_core::billing;
 
-use blueprint_sdk::std::collections::HashMap;
-use blueprint_sdk::std::sync::{Arc, OnceLock, RwLock};
+use blueprint_sdk::std::sync::{Arc, OnceLock};
 use blueprint_sdk::std::time::Duration;
 
 use alloy_sol_types::sol;
@@ -19,7 +29,7 @@ use blueprint_sdk::runner::BackgroundService;
 use blueprint_sdk::tangle::extract::{TangleArg, TangleResult};
 use blueprint_sdk::tangle::layers::TangleLayer;
 use blueprint_sdk::Job;
-use tokio::sync::{oneshot, Semaphore};
+use tokio::sync::oneshot;
 
 use crate::config::OperatorConfig;
 use crate::vllm::VllmProcess;
@@ -228,7 +238,7 @@ impl BackgroundService for InferenceServer {
             }
 
             // 2. Build billing client
-            let billing_client = match billing::BillingClient::new(config.clone()).await {
+            let billing_client = match BillingClient::new(&config.tangle, &config.billing) {
                 Ok(b) => Arc::new(b),
                 Err(e) => {
                     tracing::error!(error = %e, "failed to create billing client");
@@ -237,30 +247,31 @@ impl BackgroundService for InferenceServer {
                 }
             };
 
-            // 3. Build semaphore from config (0 = unlimited)
-            let max_concurrent = config.server.max_concurrent_requests;
-            let semaphore = Arc::new(if max_concurrent == 0 {
-                Semaphore::new(Semaphore::MAX_PERMITS)
-            } else {
-                Semaphore::new(max_concurrent)
-            });
-
-            // 4. Create shutdown channel for graceful shutdown
+            // 3. Create shutdown channel for graceful shutdown
             let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 
-            // 5. Start the HTTP server
+            // 4. Build the HTTP server state via the shared AppStateBuilder,
+            //    attaching the vLLM process as the backend extension.
             let operator_address = billing_client.operator_address();
-            let nonce_store = Arc::new(server::NonceStore::load(
-                config.billing.nonce_store_path.clone(),
-            ));
-            let state = server::AppState {
-                config: config.clone(),
-                vllm: vllm_handle.clone(),
-                billing: billing_client,
-                semaphore,
-                nonce_store,
-                active_per_account: Arc::new(RwLock::new(HashMap::new())),
-                operator_address,
+            let nonce_store = Arc::new(NonceStore::load(config.billing.nonce_store_path.clone()));
+            let backend = server::VllmBackend::new(config.clone(), vllm_handle.clone());
+
+            let state = match AppStateBuilder::new()
+                .billing(billing_client)
+                .nonce_store(nonce_store)
+                .server_config(Arc::new(config.server.clone()))
+                .billing_config(Arc::new(config.billing.clone()))
+                .tangle_config(Arc::new(config.tangle.clone()))
+                .operator_address(operator_address)
+                .backend(backend)
+                .build()
+            {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::error!(error = %e, "failed to build AppState");
+                    let _ = tx.send(Err(RunnerError::Other(e.to_string().into())));
+                    return;
+                }
             };
 
             match server::start(state, shutdown_rx).await {

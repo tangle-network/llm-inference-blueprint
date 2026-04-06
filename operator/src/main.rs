@@ -7,9 +7,9 @@ use blueprint_sdk::runner::tangle::config::TangleConfig;
 use blueprint_sdk::runner::BlueprintRunner;
 use blueprint_sdk::tangle::{TangleConsumer, TangleProducer};
 
-use vllm_inference::config::OperatorConfig;
-use vllm_inference::health;
-use vllm_inference::InferenceServer;
+use llm_inference::config::OperatorConfig;
+use llm_inference::detect_gpus;
+use llm_inference::InferenceServer;
 
 fn setup_log() {
     use tracing_subscriber::{fmt, EnvFilter};
@@ -71,7 +71,7 @@ async fn main() -> Result<(), blueprint_sdk::Error> {
     }
 
     // Check GPU availability (non-fatal)
-    match health::detect_gpus().await {
+    match detect_gpus().await {
         Ok(gpus) => {
             tracing::info!(count = gpus.len(), "detected GPUs");
             for gpu in &gpus {
@@ -108,7 +108,7 @@ async fn main() -> Result<(), blueprint_sdk::Error> {
         .map(|q| q.heartbeat_interval_secs > 0)
         .unwrap_or(false);
     if qos_enabled {
-        match vllm_inference::qos::start_heartbeat(config.clone()).await {
+        match llm_inference::qos::start_heartbeat(config.clone()).await {
             Ok(_handle) => {
                 let interval = config.qos.as_ref().unwrap().heartbeat_interval_secs;
                 tracing::info!(interval_secs = interval, "QoS heartbeat started");
@@ -127,7 +127,7 @@ async fn main() -> Result<(), blueprint_sdk::Error> {
     };
 
     BlueprintRunner::builder(TangleConfig::default(), env)
-        .router(vllm_inference::router())
+        .router(llm_inference::router())
         .producer(tangle_producer)
         .consumer(tangle_consumer)
         .background_service(inference_server)

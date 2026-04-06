@@ -22,7 +22,7 @@ use blueprint_anvil_testing_utils::{missing_tnt_core_artifacts, BlueprintHarness
 use serde_json::{json, Value};
 use std::time::Duration;
 use tokio::time::timeout;
-use vllm_inference::{init_for_testing, router, InferenceRequest, InferenceResult, INFERENCE_JOB};
+use llm_inference::{init_for_testing, router, InferenceRequest, InferenceResult, INFERENCE_JOB};
 
 const TEST_TIMEOUT: Duration = Duration::from_secs(120);
 const MOCK_MODEL: &str = "test-model";

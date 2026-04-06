@@ -6,7 +6,7 @@ use std::time::Duration;
 use alloy_sol_types::SolValue;
 use anyhow::{Result, ensure};
 use wiremock::{MockServer, Mock, ResponseTemplate, matchers::{method, path}};
-use vllm_inference::{InferenceRequest, INFERENCE_JOB};
+use llm_inference::{InferenceRequest, INFERENCE_JOB};
 
 /// Test that the router processes a job correctly when the vLLM backend responds.
 /// This doesn't use SeededTangleTestnet (which requires specific fixtures),
@@ -26,7 +26,7 @@ async fn test_router_processes_job_with_real_vllm_backend() -> Result<()> {
         .await;
 
     // Initialize production endpoint
-    vllm_inference::init_for_testing(&mock_vllm.uri(), "test-model");
+    llm_inference::init_for_testing(&mock_vllm.uri(), "test-model");
 
     // Call the REAL handler directly (bypassing TangleLayer which needs chain context)
     let request = InferenceRequest {
@@ -36,7 +36,7 @@ async fn test_router_processes_job_with_real_vllm_backend() -> Result<()> {
     };
 
     // This calls the actual run_inference function — the same code that runs in production
-    let result = vllm_inference::run_inference_direct(&request).await;
+    let result = llm_inference::run_inference_direct(&request).await;
 
     match result {
         Ok(inference_result) => {

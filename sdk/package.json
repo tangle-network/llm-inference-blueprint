@@ -1,7 +1,7 @@
 {
-  "name": "@tangle-network/vllm-inference-sdk",
+  "name": "@tangle-network/llm-inference-sdk",
   "version": "0.1.0",
-  "description": "Client SDK for Tangle vLLM inference blueprint with ShieldedCredits billing",
+  "description": "Client SDK for Tangle LLM inference blueprint with ShieldedCredits billing",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {

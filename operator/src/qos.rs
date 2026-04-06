@@ -19,7 +19,7 @@ use alloy::{
 };
 
 use crate::config::OperatorConfig;
-use crate::metrics;
+use tangle_inference_core::metrics;
 
 // On-chain heartbeat contract binding.
 // The IOperatorStatusRegistry.submitHeartbeat call is the same one used by
@@ -42,28 +42,15 @@ sol! {
 }
 
 /// QoS configuration embedded in OperatorConfig.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct QoSConfig {
     /// Heartbeat interval in seconds. 0 = disabled.
-    #[serde(default = "default_heartbeat_interval")]
+    #[serde(default)]
     pub heartbeat_interval_secs: u64,
 
     /// On-chain address of the IOperatorStatusRegistry contract.
     #[serde(default)]
     pub status_registry_address: Option<String>,
-}
-
-impl Default for QoSConfig {
-    fn default() -> Self {
-        Self {
-            heartbeat_interval_secs: 0,
-            status_registry_address: None,
-        }
-    }
-}
-
-fn default_heartbeat_interval() -> u64 {
-    0
 }
 
 /// Start the QoS heartbeat loop as a background task.
