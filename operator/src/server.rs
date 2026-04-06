@@ -8,6 +8,8 @@
 //! * Request/response types for the OpenAI chat/completions wire format.
 //! * HTTP handlers that glue the shared billing flow to the vLLM subprocess.
 
+use std::sync::Mutex;
+
 use blueprint_sdk::std::sync::Arc;
 use blueprint_sdk::std::time::Duration;
 
@@ -28,7 +30,8 @@ use tower_http::timeout::TimeoutLayer;
 use tower_http::trace::TraceLayer;
 
 use tangle_inference_core::server::{
-    error_response, extract_x402_spend_auth, payment_required, settle_billing, validate_spend_auth,
+    error_response, extract_x402_spend_auth, payment_required,
+    settle_billing_with_recovery, validate_spend_auth,
 };
 use tangle_inference_core::{
     detect_gpus, AppState, CostModel, CostParams, GpuInfo, PerTokenCostModel, RequestGuard,
@@ -48,6 +51,8 @@ pub struct VllmBackend {
     pub config: Arc<OperatorConfig>,
     pub vllm: Arc<VllmProcess>,
     pub cost_model: PerTokenCostModel,
+    /// Handles of spawned settlement tasks, drained on shutdown.
+    pub pending_settlements: Mutex<Vec<JoinHandle<()>>>,
 }
 
 impl VllmBackend {
@@ -60,7 +65,25 @@ impl VllmBackend {
             config,
             vllm,
             cost_model,
+            pending_settlements: Mutex::new(Vec::new()),
         }
+    }
+
+    /// Register a spawned settlement task for shutdown drain.
+    pub fn track_settlement(&self, handle: JoinHandle<()>) {
+        if let Ok(mut handles) = self.pending_settlements.lock() {
+            // Prune completed handles to avoid unbounded growth.
+            handles.retain(|h| !h.is_finished());
+            handles.push(handle);
+        }
+    }
+
+    /// Drain all pending settlement handles, returning them for awaiting.
+    pub fn drain_settlements(&self) -> Vec<JoinHandle<()>> {
+        self.pending_settlements
+            .lock()
+            .map(|mut h| h.drain(..).collect())
+            .unwrap_or_default()
     }
 
     /// Calculate the cost for a request given token counts.
@@ -97,10 +120,13 @@ pub async fn start(
         .layer(TimeoutLayer::new(Duration::from_secs(stream_timeout_secs)))
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
-        .with_state(state);
+        .with_state(state.clone());
 
     let listener = tokio::net::TcpListener::bind(&bind).await?;
     tracing::info!(bind = %bind, "HTTP server listening");
+
+    // Clone state so we can drain pending settlements after the server stops.
+    let state_for_drain = state;
 
     let handle = tokio::spawn(async move {
         let shutdown_signal = async move {
@@ -112,6 +138,19 @@ pub async fn start(
             .await
         {
             tracing::error!(error = %e, "HTTP server error");
+        }
+
+        // Drain pending settlement tasks before exiting.
+        if let Some(backend) = state_for_drain.backend::<VllmBackend>() {
+            let handles = backend.drain_settlements();
+            if !handles.is_empty() {
+                tracing::info!(count = handles.len(), "draining pending settlements before shutdown");
+                let _ = tokio::time::timeout(
+                    Duration::from_secs(30),
+                    futures_util::future::join_all(handles),
+                )
+                .await;
+            }
         }
     });
 
@@ -363,15 +402,28 @@ async fn handle_non_streaming(
     );
     metrics_guard.set_success();
 
-    // Post-response settlement
-    if let (Some(ref spend_auth), Some(preauth)) = (&req.spend_auth, preauth_amount) {
+    // Post-response settlement (spawned so response returns immediately)
+    if let (Some(spend_auth), Some(preauth)) = (req.spend_auth, preauth_amount) {
         let actual_cost = backend.calculate_cost(
             vllm_response.usage.prompt_tokens,
             vllm_response.usage.completion_tokens,
         );
-        if let Err(e) = settle_billing(&state.billing, spend_auth, preauth, actual_cost).await {
-            tracing::error!(error = %e, "on-chain settlement failed — manual recovery required");
-        }
+        let billing = state.billing.clone();
+        let recovery_queue = state.settlement_recovery_queue.clone();
+        let handle = tokio::spawn(async move {
+            if let Err(e) = settle_billing_with_recovery(
+                &billing,
+                &spend_auth,
+                preauth,
+                actual_cost,
+                recovery_queue.as_deref(),
+            )
+            .await
+            {
+                tracing::error!(error = %e, "on-chain settlement failed — manual recovery required");
+            }
+        });
+        backend.track_settlement(handle);
     }
 
     Json(vllm_response).into_response()
@@ -403,6 +455,7 @@ async fn handle_streaming(
 
     let spend_auth_for_settlement = req.spend_auth;
     let billing_for_settlement = state.billing.clone();
+    let recovery_queue_for_settlement = state.settlement_recovery_queue.clone();
     // Clone needed for cost calculation in the background settlement task.
     let state_for_settlement = state.clone();
 
@@ -506,7 +559,7 @@ async fn handle_streaming(
     // shuts down before completion, the task's drop is visible in logs via
     // the tracing guard inside the future.
     let max_tokens_for_fallback = req.max_tokens;
-    let _settlement_handle = tokio::spawn(async move {
+    let settlement_handle = tokio::spawn(async move {
         // Guard that logs if this future is cancelled mid-flight (e.g. on shutdown).
         struct SettlementDropGuard(bool);
         impl Drop for SettlementDropGuard {
@@ -533,7 +586,13 @@ async fn handle_streaming(
                     (&spend_auth_for_settlement, preauth_amount)
                 {
                     let actual_cost = backend.calculate_cost(prompt_tokens, completion_tokens);
-                    if let Err(e) = settle_billing(&billing_for_settlement, spend_auth, preauth, actual_cost).await {
+                    if let Err(e) = settle_billing_with_recovery(
+                        &billing_for_settlement,
+                        spend_auth,
+                        preauth,
+                        actual_cost,
+                        recovery_queue_for_settlement.as_deref(),
+                    ).await {
                         tracing::error!(error = %e, "on-chain settlement failed — manual recovery required");
                     }
                 }
@@ -547,7 +606,13 @@ async fn handle_streaming(
                     (&spend_auth_for_settlement, preauth_amount)
                 {
                     let actual_cost = backend.calculate_cost(0, max_tokens_for_fallback);
-                    if let Err(e) = settle_billing(&billing_for_settlement, spend_auth, preauth, actual_cost).await {
+                    if let Err(e) = settle_billing_with_recovery(
+                        &billing_for_settlement,
+                        spend_auth,
+                        preauth,
+                        actual_cost,
+                        recovery_queue_for_settlement.as_deref(),
+                    ).await {
                         tracing::error!(error = %e, "on-chain settlement failed — manual recovery required");
                     }
                 }
@@ -558,6 +623,9 @@ async fn handle_streaming(
         drop_guard.0 = true;
         drop(permit);
     });
+
+    // Track for graceful shutdown drain.
+    backend.track_settlement(settlement_handle);
 
     Response::builder()
         .status(StatusCode::OK)
