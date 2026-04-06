@@ -369,7 +369,9 @@ async fn handle_non_streaming(
             vllm_response.usage.prompt_tokens,
             vllm_response.usage.completion_tokens,
         );
-        settle_billing(&state.billing, spend_auth, preauth, actual_cost).await;
+        if let Err(e) = settle_billing(&state.billing, spend_auth, preauth, actual_cost).await {
+            tracing::error!(error = %e, "on-chain settlement failed — manual recovery required");
+        }
     }
 
     Json(vllm_response).into_response()
@@ -499,8 +501,26 @@ async fn handle_streaming(
 
     // Background task: waits for the stream to complete, settles billing,
     // records metrics, releases the semaphore permit on drop.
+    //
+    // The JoinHandle is stored in `_settlement_handle` so that if the runtime
+    // shuts down before completion, the task's drop is visible in logs via
+    // the tracing guard inside the future.
     let max_tokens_for_fallback = req.max_tokens;
-    tokio::spawn(async move {
+    let _settlement_handle = tokio::spawn(async move {
+        // Guard that logs if this future is cancelled mid-flight (e.g. on shutdown).
+        struct SettlementDropGuard(bool);
+        impl Drop for SettlementDropGuard {
+            fn drop(&mut self) {
+                if !self.0 {
+                    tracing::warn!(
+                        "streaming settlement task dropped before completion — \
+                         on-chain settlement may be lost, manual recovery required"
+                    );
+                }
+            }
+        }
+        let mut drop_guard = SettlementDropGuard(false);
+
         let backend = state_for_settlement
             .backend::<VllmBackend>()
             .expect("backend");
@@ -513,8 +533,9 @@ async fn handle_streaming(
                     (&spend_auth_for_settlement, preauth_amount)
                 {
                     let actual_cost = backend.calculate_cost(prompt_tokens, completion_tokens);
-                    settle_billing(&billing_for_settlement, spend_auth, preauth, actual_cost)
-                        .await;
+                    if let Err(e) = settle_billing(&billing_for_settlement, spend_auth, preauth, actual_cost).await {
+                        tracing::error!(error = %e, "on-chain settlement failed — manual recovery required");
+                    }
                 }
             }
             Err(_) => {
@@ -526,12 +547,15 @@ async fn handle_streaming(
                     (&spend_auth_for_settlement, preauth_amount)
                 {
                     let actual_cost = backend.calculate_cost(0, max_tokens_for_fallback);
-                    settle_billing(&billing_for_settlement, spend_auth, preauth, actual_cost)
-                        .await;
+                    if let Err(e) = settle_billing(&billing_for_settlement, spend_auth, preauth, actual_cost).await {
+                        tracing::error!(error = %e, "on-chain settlement failed — manual recovery required");
+                    }
                 }
             }
         }
 
+        // Disarm the drop guard — settlement completed successfully.
+        drop_guard.0 = true;
         drop(permit);
     });
 
