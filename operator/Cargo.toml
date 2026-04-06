@@ -12,6 +12,12 @@ path = "src/lib.rs"
 name = "vllm-operator"
 path = "src/main.rs"
 
+# Minimal HTTP-only operator for E2E tests — skips BlueprintRunner and
+# Tangle Substrate, runs just the HTTP server + billing client.
+[[bin]]
+name = "operator-lite"
+path = "src/bin/operator_lite.rs"
+
 [dependencies]
 blueprint-sdk = { workspace = true, features = ["tee"] }
 alloy = { workspace = true }

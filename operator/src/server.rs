@@ -244,14 +244,42 @@ pub struct ChatMessage {
     pub content: String,
 }
 
+/// Deserialize a u64 that may be JSON number or string (JS bigints serialize as strings).
+fn de_u64_flex<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<u64, D::Error> {
+    use serde::Deserialize as _;
+    #[derive(serde::Deserialize)]
+    #[serde(untagged)]
+    enum N { Num(u64), Str(String) }
+    match N::deserialize(deserializer)? {
+        N::Num(n) => Ok(n),
+        N::Str(s) => s.parse::<u64>().map_err(serde::de::Error::custom),
+    }
+}
+
+fn de_u8_flex<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<u8, D::Error> {
+    use serde::Deserialize as _;
+    #[derive(serde::Deserialize)]
+    #[serde(untagged)]
+    enum N { Num(u8), Str(String) }
+    match N::deserialize(deserializer)? {
+        N::Num(n) => Ok(n),
+        N::Str(s) => s.parse::<u8>().map_err(serde::de::Error::custom),
+    }
+}
+
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SpendAuthPayload {
     pub commitment: String,
+    #[serde(deserialize_with = "de_u64_flex")]
     pub service_id: u64,
+    #[serde(deserialize_with = "de_u8_flex")]
     pub job_index: u8,
     pub amount: String,
     pub operator: String,
+    #[serde(deserialize_with = "de_u64_flex")]
     pub nonce: u64,
+    #[serde(deserialize_with = "de_u64_flex")]
     pub expiry: u64,
     pub signature: String,
 }
