@@ -23,3 +23,4 @@ forge-std = "1.9.4"
 "@openzeppelin-contracts" = "5.1.0"
 tnt-core = { version = "0.10.4", git = "https://github.com/tangle-network/tnt-core.git", rev = "v0.10.4" }
 "@openzeppelin-contracts-upgradeable" = "5.1.0"
+shielded-payment-gateway = { version = "0.1.0", git = "https://github.com/tangle-network/shielded-payment-gateway.git", rev = "eaab84c" }

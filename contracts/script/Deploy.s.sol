@@ -4,8 +4,8 @@ pragma solidity ^0.8.20;
 import {Script, console2} from "forge-std/Script.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {InferenceBSM} from "../src/InferenceBSM.sol";
-import {ShieldedCredits} from "../src/ShieldedCredits.sol";
-import {RLNSettlement} from "../src/RLNSettlement.sol";
+import {ShieldedCredits} from "shielded-payment-gateway/src/shielded/ShieldedCredits.sol";
+import {RLNSettlement} from "shielded-payment-gateway/src/shielded/RLNSettlement.sol";
 
 /// @title Deploy — vLLM Inference Blueprint Contracts
 /// @notice Deploys InferenceBSM, ShieldedCredits, and RLNSettlement.

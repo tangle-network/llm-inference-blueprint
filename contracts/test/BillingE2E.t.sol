@@ -2,8 +2,8 @@
 pragma solidity ^0.8.26;
 
 import { Test } from "forge-std/Test.sol";
-import { ShieldedCredits } from "../src/ShieldedCredits.sol";
-import { IShieldedCredits } from "../src/IShieldedCredits.sol";
+import { ShieldedCredits } from "shielded-payment-gateway/src/shielded/ShieldedCredits.sol";
+import { IShieldedCredits } from "shielded-payment-gateway/src/shielded/IShieldedCredits.sol";
 import { MessageHashUtils } from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
 
 /// @title MockERC20 for testing

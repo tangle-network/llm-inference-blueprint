@@ -2,8 +2,8 @@
 pragma solidity ^0.8.26;
 
 import { Test } from "forge-std/Test.sol";
-import { RLNSettlement } from "../src/RLNSettlement.sol";
-import { IRLNSettlement } from "../src/IRLNSettlement.sol";
+import { RLNSettlement } from "shielded-payment-gateway/src/shielded/RLNSettlement.sol";
+import { IRLNSettlement } from "shielded-payment-gateway/src/shielded/IRLNSettlement.sol";
 
 /// @title MockERC20 for RLN billing tests
 contract MockToken {
@@ -182,7 +182,7 @@ contract RLNBillingE2ETest is Test {
         settlement.slash(nullifier, x1, y1, x2, y2, identityCommitment);
 
         // Balance locked, not yet paid
-        (, uint256 bal) = settlement.getDeposit(identityCommitment);
+        (, uint256 bal,) = settlement.getDeposit(identityCommitment);
         assertEq(bal, 0);
         assertEq(token.balanceOf(slasher), 0);
 
