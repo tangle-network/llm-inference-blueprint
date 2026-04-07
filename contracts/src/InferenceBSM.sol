@@ -8,8 +8,8 @@ import { BlueprintServiceManagerBase } from "tnt-core/BlueprintServiceManagerBas
 
 /// @title InferenceBSM
 /// @notice Blueprint Service Manager for vLLM inference services.
-/// @dev Operators register with GPU capabilities. Services only accept tsUSD payment
-///      (the ShieldedCredits wrapped token) for anonymous billing.
+/// @dev Operators register with GPU capabilities. Services only accept the configured
+///      payment token (e.g. USDC wrapped via VAnchor) for anonymous billing.
 contract InferenceBSM is Initializable, UUPSUpgradeable, BlueprintServiceManagerBase {
     using EnumerableSet for EnumerableSet.AddressSet;
 
@@ -48,8 +48,8 @@ contract InferenceBSM is Initializable, UUPSUpgradeable, BlueprintServiceManager
     /// @notice Model pricing and metadata
     struct ModelConfig {
         uint32 maxContextLen;
-        uint64 pricePerInputToken; // in tsUSD base units
-        uint64 pricePerOutputToken; // in tsUSD base units
+        uint64 pricePerInputToken; // in payment token base units
+        uint64 pricePerOutputToken; // in payment token base units
         uint32 minGpuVramMib; // Minimum VRAM required to serve this model
         bool enabled;
     }
@@ -58,8 +58,8 @@ contract InferenceBSM is Initializable, UUPSUpgradeable, BlueprintServiceManager
     // STATE
     // ═══════════════════════════════════════════════════════════════════════
 
-    /// @notice The only accepted payment token (tsUSD -- shielded pool wrapped token)
-    address public tsUSD;
+    /// @notice The accepted payment token (e.g. USDC wrapped via VAnchor).
+    address public paymentToken;
 
     /// @notice Minimum operator stake (in TNT)
     uint256 public constant MIN_OPERATOR_STAKE = 100 ether;
@@ -83,10 +83,10 @@ contract InferenceBSM is Initializable, UUPSUpgradeable, BlueprintServiceManager
     }
 
     /// @notice Initialize the contract (called once via proxy)
-    /// @param _tsUSD The wrapped stablecoin accepted for payment
-    function initialize(address _tsUSD) external initializer {
+    /// @param _paymentToken The ERC20 token accepted for payment (e.g. USDC wrapped via VAnchor)
+    function initialize(address _paymentToken) external initializer {
         __UUPSUpgradeable_init();
-        tsUSD = _tsUSD;
+        paymentToken = _paymentToken;
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -182,8 +182,8 @@ contract InferenceBSM is Initializable, UUPSUpgradeable, BlueprintServiceManager
         address paymentAsset,
         uint256
     ) external payable override onlyFromTangle {
-        // Only accept tsUSD for payment (enables anonymous ShieldedCredits billing)
-        if (paymentAsset != tsUSD && paymentAsset != address(0)) {
+        // Only accept the configured payment token
+        if (paymentAsset != paymentToken && paymentAsset != address(0)) {
             revert InvalidPaymentAsset(paymentAsset);
         }
     }
@@ -196,8 +196,8 @@ contract InferenceBSM is Initializable, UUPSUpgradeable, BlueprintServiceManager
         address[] calldata,
         uint64
     ) external override onlyFromTangle {
-        // Restrict payment to tsUSD for this service
-        _permitAsset(serviceId, tsUSD);
+        // Restrict payment to the configured payment token for this service
+        _permitAsset(serviceId, paymentToken);
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -250,7 +250,7 @@ contract InferenceBSM is Initializable, UUPSUpgradeable, BlueprintServiceManager
     function queryIsPaymentAssetAllowed(uint64 serviceId, address asset) external view override returns (bool) {
         if (asset == address(0)) return true;
         address[] memory permitted = _getPermittedAssets(serviceId);
-        if (permitted.length == 0) return asset == tsUSD;
+        if (permitted.length == 0) return asset == paymentToken;
         for (uint256 i; i < permitted.length; ++i) {
             if (permitted[i] == asset) return true;
         }

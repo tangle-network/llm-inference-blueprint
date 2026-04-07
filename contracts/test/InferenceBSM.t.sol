@@ -6,7 +6,7 @@ import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy
 import { InferenceBSM } from "../src/InferenceBSM.sol";
 import { BlueprintServiceManagerBase } from "tnt-core/BlueprintServiceManagerBase.sol";
 
-contract MockTsUSD {
+contract MockPaymentToken {
     mapping(address => uint256) public balanceOf;
     mapping(address => mapping(address => uint256)) public allowance;
 
@@ -38,7 +38,7 @@ contract MockTsUSD {
 
 contract InferenceBSMTest is Test {
     InferenceBSM public bsm;
-    MockTsUSD public tsUSD;
+    MockPaymentToken public paymentToken;
 
     address public tangleCore = address(0xC0DE);
     address public owner = address(0xBEEF);
@@ -47,11 +47,11 @@ contract InferenceBSMTest is Test {
     address public user = address(0x3333);
 
     function setUp() public {
-        tsUSD = new MockTsUSD();
+        paymentToken = new MockPaymentToken();
 
         // Deploy implementation + proxy
         InferenceBSM impl = new InferenceBSM();
-        bytes memory initData = abi.encodeCall(InferenceBSM.initialize, (address(tsUSD)));
+        bytes memory initData = abi.encodeCall(InferenceBSM.initialize, (address(paymentToken)));
         ERC1967Proxy proxy = new ERC1967Proxy(address(impl), initData);
         bsm = InferenceBSM(payable(address(proxy)));
 
@@ -75,7 +75,7 @@ contract InferenceBSMTest is Test {
         assertEq(bsm.blueprintId(), 1);
         assertEq(bsm.blueprintOwner(), owner);
         assertEq(bsm.tangleCore(), tangleCore);
-        assertEq(bsm.tsUSD(), address(tsUSD));
+        assertEq(bsm.paymentToken(), address(paymentToken));
     }
 
     function test_cannotReinitialize() public {
@@ -188,7 +188,7 @@ contract InferenceBSMTest is Test {
         address[] memory ops = new address[](0);
 
         vm.prank(tangleCore);
-        bsm.onRequest(1, user, ops, "", 3600, address(tsUSD), 1000);
+        bsm.onRequest(1, user, ops, "", 3600, address(paymentToken), 1000);
     }
 
     function test_onRequest_nativePayment() public {
@@ -257,13 +257,13 @@ contract InferenceBSMTest is Test {
         assertTrue(forceExit);
     }
 
-    function test_paymentAssetAllowed_tsUSD() public {
+    function test_paymentAssetAllowed_paymentToken() public {
         // Initialize a service to set up permitted assets
         address[] memory callers = new address[](0);
         vm.prank(tangleCore);
         bsm.onServiceInitialized(1, 1, 1, owner, callers, 3600);
 
-        assertTrue(bsm.queryIsPaymentAssetAllowed(1, address(tsUSD)));
+        assertTrue(bsm.queryIsPaymentAssetAllowed(1, address(paymentToken)));
         assertFalse(bsm.queryIsPaymentAssetAllowed(1, address(0xDEAD)));
         assertTrue(bsm.queryIsPaymentAssetAllowed(1, address(0))); // native always allowed
     }

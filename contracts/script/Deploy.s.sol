@@ -16,12 +16,12 @@ import {RLNSettlement} from "shielded-payment-gateway/src/shielded/RLNSettlement
 ///
 /// Environment variables:
 ///   PRIVATE_KEY          — deployer private key
-///   TSUSD_ADDRESS        — tsUSD token address (shielded pool wrapped stablecoin)
-///   TANGLE_CORE_ADDRESS  — Tangle core contract address (optional, set post-deploy)
+///   PAYMENT_TOKEN_ADDRESS — ERC20 payment token address (e.g. USDC wrapped via VAnchor)
+///   TANGLE_CORE_ADDRESS   — Tangle core contract address (optional, set post-deploy)
 contract Deploy is Script {
     function run() external {
         uint256 deployerKey = vm.envUint("PRIVATE_KEY");
-        address tsUSD = vm.envOr("TSUSD_ADDRESS", address(0));
+        address paymentToken = vm.envOr("PAYMENT_TOKEN_ADDRESS", address(0));
         address tangleCore = vm.envOr("TANGLE_CORE_ADDRESS", address(0));
 
         vm.startBroadcast(deployerKey);
@@ -35,14 +35,14 @@ contract Deploy is Script {
         console2.log("RLNSettlement:", address(rln));
 
         // 3. Deploy InferenceBSM (UUPS proxy)
-        if (tsUSD == address(0)) {
-            console2.log("WARNING: TSUSD_ADDRESS not set, using address(1) as placeholder");
-            tsUSD = address(1);
+        if (paymentToken == address(0)) {
+            console2.log("WARNING: PAYMENT_TOKEN_ADDRESS not set, using address(1) as placeholder");
+            paymentToken = address(1);
         }
         InferenceBSM impl = new InferenceBSM();
         ERC1967Proxy proxy = new ERC1967Proxy(
             address(impl),
-            abi.encodeCall(InferenceBSM.initialize, (tsUSD))
+            abi.encodeCall(InferenceBSM.initialize, (paymentToken))
         );
         InferenceBSM bsm = InferenceBSM(payable(address(proxy)));
         console2.log("InferenceBSM impl:", address(impl));
@@ -58,7 +58,7 @@ contract Deploy is Script {
         bsm.configureModel(
             "Qwen/Qwen2-0.5B",  // model name
             4096,                 // max context length
-            1,                    // price per input token (tsUSD base units)
+            1,                    // price per input token (payment token base units)
             2,                    // price per output token
             2048                  // min GPU VRAM MiB
         );
@@ -72,6 +72,6 @@ contract Deploy is Script {
         console2.log("ShieldedCredits:", address(credits));
         console2.log("RLNSettlement:  ", address(rln));
         console2.log("InferenceBSM:    ", address(bsm), "(proxy)");
-        console2.log("tsUSD:          ", tsUSD);
+        console2.log("paymentToken:   ", paymentToken);
     }
 }

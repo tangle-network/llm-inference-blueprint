@@ -665,7 +665,7 @@ async fn operator_info(State(state): State<AppState>) -> Json<serde_json::Value>
         "pricing": {
             "price_per_input_token": backend.config.vllm.price_per_input_token,
             "price_per_output_token": backend.config.vllm.price_per_output_token,
-            "currency": "tsUSD",
+            "currency": "payment_token",
         },
         "gpu": {
             "count": backend.config.gpu.expected_gpu_count,
