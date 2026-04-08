@@ -106,7 +106,7 @@ pub fn init_for_testing(base_url: &str, model: &str) {
 pub fn router() -> Router {
     Router::new().route(
         INFERENCE_JOB,
-        run_inference.layer(TangleLayer).layer(blueprint_sdk::tee::TeeLayer::new()),
+        run_inference.layer(TangleLayer),
     )
 }
 
