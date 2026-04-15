@@ -55,6 +55,9 @@ tokio-stream = { workspace = true }
 bytes = "1"
 uuid = { version = "1", features = ["v4"] }
 
+[build-dependencies]
+serde_json = { workspace = true }
+
 [dev-dependencies]
 blueprint-router = { git = "https://github.com/tangle-network/blueprint", branch = "main" }
 blueprint-core = { git = "https://github.com/tangle-network/blueprint", branch = "main" }

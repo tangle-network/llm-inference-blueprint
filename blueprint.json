@@ -1,0 +1,24 @@
+{
+  "name": "llm-inference",
+  "description": "vLLM-backed LLM inference operator with shielded billing",
+  "version": "0.1.0",
+  "manager": {
+    "Evm": "InferenceBSM"
+  },
+  "master_revision": "Latest",
+  "jobs": [
+    {
+      "name": "inference",
+      "job_index": 0,
+      "description": "Run LLM inference via vLLM backend (prompt → completion)",
+      "inputs": [
+        "(string,uint32,uint64)"
+      ],
+      "outputs": [
+        "(string,uint32,uint32)"
+      ],
+      "required_results": 1,
+      "execution": "local"
+    }
+  ]
+}
