@@ -1,0 +1,54 @@
+{
+  "metadata_uri": "ipfs://",
+  "manager": "0x0000000000000000000000000000000000000000",
+  "metadata": {
+    "name": "llm-inference",
+    "description": "vLLM-backed LLM inference operator with shielded billing via Tangle",
+    "author": "Tangle Network",
+    "license": "MIT OR Apache-2.0",
+    "website": "https://tangle.tools",
+    "code_repository": "https://github.com/tangle-network/llm-inference-blueprint",
+    "profiling_data": "{\"execution_profile\":{\"gpu\":{\"policy\":\"required\",\"min_count\":1,\"min_vram_gb\":8}}}"
+  },
+  "config": {
+    "membership": "Dynamic",
+    "min_operators": 1,
+    "max_operators": 0
+  },
+  "supported_memberships": ["Dynamic", "Fixed"],
+  "jobs": [
+    {
+      "name": "inference",
+      "params": ["(string,uint32,uint64)"],
+      "result": ["(string,uint32,uint32)"],
+      "verifier": "None"
+    }
+  ],
+  "sources": [
+    {
+      "kind": "Native",
+      "native": {
+        "fetcher": "Github",
+        "entrypoint": "./llm-operator",
+        "github": {
+          "owner": "tangle-network",
+          "repo": "llm-inference-blueprint",
+          "tag": "v0.1.0",
+          "binaries": [
+            {
+              "name": "llm-operator",
+              "arch": "amd64",
+              "os": "linux",
+              "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+            }
+          ]
+        }
+      },
+      "testing": {
+        "cargo_package": "llm-inference",
+        "cargo_bin": "llm-operator",
+        "base_path": "."
+      }
+    }
+  ]
+}
