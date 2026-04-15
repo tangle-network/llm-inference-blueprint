@@ -54,15 +54,11 @@ contract Deploy is Script {
             console2.log("BSM initialized with Tangle core:", tangleCore);
         }
 
-        // 5. Configure a default model (operators can register against this)
-        bsm.configureModel(
-            "Qwen/Qwen2-0.5B",  // model name
-            4096,                 // max context length
-            1,                    // price per input token (payment token base units)
-            2,                    // price per output token
-            2048                  // min GPU VRAM MiB
-        );
-        console2.log("Default model configured: Qwen/Qwen2-0.5B");
+        // 5. Model config must be done post-deploy by the blueprint owner.
+        // The forge-script msg.sender shim doesn't align with the BSM's
+        // owner check even though startBroadcast() uses the correct signer.
+        // Run `cast send <bsm> 'configureModel(...)' --from <owner>` separately.
+        console2.log("NOTE: configureModel must be called post-deploy by blueprint owner");
 
         vm.stopBroadcast();
 
