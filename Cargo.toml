@@ -28,13 +28,8 @@ tokio-stream = "0.1"
 
 # Point the blueprint-sdk deps at our local checkout so we reuse its Cargo.lock
 # (has a pre-yank copy of core2 resolved).
-[patch."https://github.com/tangle-network/blueprint"]
-blueprint-sdk = { path = "../blueprint-sdk/crates/sdk" }
-blueprint-anvil-testing-utils = { path = "../blueprint-sdk/crates/testing-utils/anvil" }
-workspace-hack = { path = "../blueprint-sdk/workspace-hack" }
-
 # core2 was entirely yanked from crates.io (all versions). libp2p-core ->
 # multihash pulls in core2 = "^0.4.0" transitively. Point at the local cargo
 # cache copy so cargo doesn't try to re-resolve from the registry.
 [patch.crates-io]
-core2 = { path = "/Users/drew/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/core2-0.4.0" }
+core2 = { git = "https://github.com/tangle-network/core2", branch = "master" }
