@@ -23,6 +23,8 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # Use cmake builder for aws-lc-sys to bypass GCC memcmp bug in cross containers
+  AWS_LC_SYS_CMAKE_BUILDER: 1
   # The binary name from [[bin]] in operator/Cargo.toml.
   # Override per repo if different.
   BINARY_NAME: ${{ vars.BINARY_NAME || 'llm-operator' }}
