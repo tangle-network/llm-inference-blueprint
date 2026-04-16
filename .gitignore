@@ -10,4 +10,3 @@ contracts/dependencies/
 *.env.*
 !.env.example
 .DS_Store
-Cargo.lock
