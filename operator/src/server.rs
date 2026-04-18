@@ -317,7 +317,7 @@ async fn chat_completions(
         let max_per_account = state.server_config.max_per_account_requests;
         if max_per_account > 0 {
             let spend_auth = req.spend_auth.as_ref().unwrap();
-            let mut map = state.active_per_account.write().await;
+            let mut map = state.active_per_account.lock().unwrap_or_else(|e| e.into_inner());
             let count = map.entry(spend_auth.commitment.clone()).or_insert(0);
             if *count >= max_per_account {
                 return error_response(
