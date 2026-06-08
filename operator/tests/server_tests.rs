@@ -10,6 +10,7 @@ use wiremock::{
 use llm_inference::config::{
     BillingConfig, GpuConfig, OperatorConfig, ServerConfig, TangleConfig, VllmConfig,
 };
+use tangle_inference_core::PaymentMode;
 use llm_inference::server::VllmBackend;
 use llm_inference::{AppStateBuilder, BillingClient, NonceStore};
 
@@ -36,6 +37,8 @@ fn test_config(vllm_port: u16) -> OperatorConfig {
             hf_token: None,
             download_dir: None,
             startup_timeout_secs: 10,
+            external: false,
+            tuner_app_shared_secret: None,
         },
         server: ServerConfig {
             host: "0.0.0.0".into(),
@@ -48,6 +51,7 @@ fn test_config(vllm_port: u16) -> OperatorConfig {
             max_per_account_requests: 0,
         },
         billing: BillingConfig {
+            payment_mode: PaymentMode::None,
             billing_required: false,
             max_spend_per_request: 1_000_000,
             min_credit_balance: 1000,
