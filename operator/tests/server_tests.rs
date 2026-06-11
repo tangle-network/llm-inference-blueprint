@@ -60,6 +60,7 @@ fn test_config(vllm_port: u16) -> OperatorConfig {
             clock_skew_tolerance_secs: 30,
             max_gas_price_gwei: 0,
             nonce_store_path: None,
+            direct_replay_store_path: None,
             payment_token_address: None,
         },
         gpu: GpuConfig {
@@ -741,8 +742,8 @@ async fn test_max_spend_per_request_rejection() {
             "messages": [{"role": "user", "content": "Hi"}],
             "spend_auth": {
                 "commitment": "0x0000000000000000000000000000000000000000000000000000000000000001",
-                "service_id": 1,
-                "job_index": 0,
+                "serviceId": 1,
+                "jobIndex": 0,
                 "amount": "99999999",
                 "operator": "0x0000000000000000000000000000000000000001",
                 "nonce": 1,

@@ -9806,7 +9806,7 @@ dependencies = [
 [[package]]
 name = "tangle-inference-core"
 version = "0.1.0"
-source = "git+https://github.com/tangle-network/tangle-inference-core?branch=master#03722189290a35a0110597dcf9fdaac28b38d40c"
+source = "git+https://github.com/tangle-network/tangle-inference-core?rev=8b1b2f34954865ba9df496de551b65085aea736c#8b1b2f34954865ba9df496de551b65085aea736c"
 dependencies = [
  "alloy",
  "anyhow",

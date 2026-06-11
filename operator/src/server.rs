@@ -33,6 +33,7 @@ use tangle_inference_core::server::{
     error_response, extract_x402_spend_auth, payment_required,
     settle_billing_with_recovery, validate_spend_auth,
 };
+use tangle_inference_core::payment::PaymentProof;
 use tangle_inference_core::{
     detect_gpus, AppState, CostModel, CostParams, GpuInfo, PerTokenCostModel, RequestGuard,
     SpendAuthPayload,
@@ -181,6 +182,14 @@ pub struct ChatCompletionRequest {
     /// ShieldedCredits spend authorization (required when billing_required is true).
     /// Can also be provided via x402 headers (X-Payment-Signature).
     pub spend_auth: Option<SpendAuthPayload>,
+
+    /// Plain-crypto payment proof (the Direct rail): a `DirectTransfer` carrying
+    /// the tx hash of an ERC-20 transfer to the operator. An alternative to
+    /// `spend_auth` — pay-per-call in USDC with no shielded pool. Authorized
+    /// through the generic payment provider (active when payment_mode is
+    /// `direct` or `both`); ignored under `shielded`-only config.
+    #[serde(default)]
+    pub payment: Option<PaymentProof>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -278,6 +287,10 @@ async fn chat_completions(
         }
     };
 
+    // Direct rail: a verified plain-USDC payment satisfies billing without a
+    // SpendAuth. Set below; consumed by the billing-required gate.
+    let mut direct_paid: Option<u64> = None;
+
     // Trusted apps skip the entire x402 / SpendAuth flow
     if !trusted_app_call {
         // 2. x402 flow: if no spend_auth in body, check X-Payment-Signature header
@@ -287,8 +300,42 @@ async fn chat_completions(
             }
         }
 
-        // 3. Enforce billing requirement — return 402 Payment Required if missing
-        if state.billing_config.billing_required && req.spend_auth.is_none() {
+        // 2b. Direct rail (plain USDC, no shielded pool): a DirectTransfer proof
+        //     is verified on-chain by the generic payment provider, which accepts
+        //     it only under payment_mode = direct | both. No preauth ceiling and
+        //     no nonce store — the provider's persistent replay store guards reuse
+        //     and the transfer already happened (settle is a no-op). Shielded
+        //     SpendAuth takes precedence when both are somehow present.
+        if req.spend_auth.is_none() {
+            if let Some(proof @ PaymentProof::DirectTransfer { .. }) = req.payment.clone() {
+                // Don't accept payment we can't serve.
+                if !backend.vllm.is_healthy().await {
+                    return error_response(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "inference backend is unavailable — payment not accepted".to_string(),
+                        "upstream_error",
+                        "vllm_unhealthy",
+                    );
+                }
+                match state.payment_provider.authorize(&proof).await {
+                    Ok(amount) => direct_paid = Some(amount),
+                    Err(e) => {
+                        return error_response(
+                            StatusCode::PAYMENT_REQUIRED,
+                            format!("direct payment verification failed: {e}"),
+                            "billing_error",
+                            "authorization_failed",
+                        );
+                    }
+                }
+            }
+        }
+
+        // 3. Enforce billing requirement — satisfied by EITHER rail.
+        if state.billing_config.billing_required
+            && req.spend_auth.is_none()
+            && direct_paid.is_none()
+        {
             // Estimate for a typical 1000-input/512-output request
             let estimated = backend.calculate_cost(1000, 512);
             return payment_required(
