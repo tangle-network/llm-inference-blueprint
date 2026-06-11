@@ -31,8 +31,8 @@ use tower_http::trace::TraceLayer;
 
 use tangle_inference_core::payment::PaymentProof;
 use tangle_inference_core::server::{
-    error_response, extract_x402_spend_auth, payment_required, settle_billing_with_recovery,
-    validate_spend_auth,
+    authorize_request, error_response, payment_required, resolve_payment_proof, settle_request,
+    AuthorizedPayment,
 };
 use tangle_inference_core::{
     detect_gpus, AppState, CostModel, CostParams, GpuInfo, PerTokenCostModel, RequestGuard,
@@ -275,171 +275,53 @@ async fn chat_completions(
         }
     };
 
-    // Direct rail: a verified plain-USDC payment satisfies billing without a
-    // SpendAuth. Set below; consumed by the billing-required gate.
-    let mut direct_paid: Option<u64> = None;
+    // Resolve the payment proof (body payment | spend_auth | x402 header), then
+    // gate -> authorize -> (after serving) settle through the shared, rail-
+    // agnostic billing flow. Shielded and direct differ only inside those core
+    // functions; this handler is identical for both.
+    let proof = resolve_payment_proof(&headers, req.spend_auth.take(), req.payment.take());
 
-    // Billing applies to every caller — no trusted-app bypass.
-    {
-        // 2. x402 flow: if no spend_auth in body, check X-Payment-Signature header
-        if req.spend_auth.is_none() {
-            if let Some(x402_auth) = extract_x402_spend_auth(&headers) {
-                req.spend_auth = Some(x402_auth);
-            }
-        }
+    if state.billing_config.billing_required && proof.is_none() {
+        let estimated = backend.calculate_cost(1000, 512);
+        return payment_required(
+            &state.billing_config,
+            &state.tangle_config,
+            state.operator_address,
+            estimated,
+        );
+    }
 
-        // 2b. Direct rail (plain USDC, no shielded pool): a DirectTransfer proof
-        //     is verified on-chain by the generic payment provider, which accepts
-        //     it only when the direct rail is enabled. No preauth ceiling and
-        //     no nonce store — the provider's persistent replay store guards reuse
-        //     and the transfer already happened (settle is a no-op). Shielded
-        //     SpendAuth takes precedence when both are somehow present.
-        if req.spend_auth.is_none() {
-            if let Some(proof @ PaymentProof::DirectTransfer { .. }) = req.payment.clone() {
-                // Don't accept payment we can't serve.
-                if !backend.vllm.is_healthy().await {
-                    return error_response(
-                        StatusCode::SERVICE_UNAVAILABLE,
-                        "inference backend is unavailable — payment not accepted".to_string(),
-                        "upstream_error",
-                        "vllm_unhealthy",
-                    );
-                }
-                match state.payment_provider.authorize(&proof).await {
-                    Ok(amount) => direct_paid = Some(amount),
-                    Err(e) => {
-                        return error_response(
-                            StatusCode::PAYMENT_REQUIRED,
-                            format!("direct payment verification failed: {e}"),
-                            "billing_error",
-                            "authorization_failed",
-                        );
-                    }
-                }
-            }
-        }
-
-        // 3. Enforce billing requirement — satisfied by EITHER rail.
-        if state.billing_config.billing_required
-            && req.spend_auth.is_none()
-            && direct_paid.is_none()
+    let authorized: Option<AuthorizedPayment> = if let Some(proof) = proof {
+        // Estimated max cost feeds the shielded pre-auth ceiling. authorize_request
+        // validates first, then checks backend health, then commits — so a bad
+        // request gets a precise 4xx rather than a health 503.
+        let estimated_prompt_tokens: u32 = req
+            .messages
+            .iter()
+            .map(|m| (m.content.len() as u32) / 4 + 1)
+            .sum();
+        let estimated_max_cost = backend.calculate_cost(estimated_prompt_tokens, req.max_tokens);
+        match authorize_request(&state, proof, estimated_max_cost, backend.vllm.is_healthy()).await
         {
-            // Estimate for a typical 1000-input/512-output request
-            let estimated = backend.calculate_cost(1000, 512);
-            return payment_required(
-                &state.billing_config,
-                &state.tangle_config,
-                state.operator_address,
-                estimated,
-            );
+            Ok(a) => Some(a),
+            Err(resp) => return resp,
         }
-    }
-
-    let mut preauth_amount: Option<u64> = None;
-
-    {
-        // 4. Validate SpendAuth (signature, account info, nonce replay, etc).
-        preauth_amount = if let Some(ref spend_auth) = req.spend_auth {
-            match validate_spend_auth(&state, spend_auth).await {
-                Ok(amt) => Some(amt),
-                Err(resp) => return resp,
-            }
-        } else {
-            None
-        };
-
-        // 5. Cost sanity check: pre-auth amount cannot exceed 1.5x estimated max cost.
-        if let (Some(_), Some(preauth)) = (&req.spend_auth, preauth_amount) {
-            let estimated_prompt_tokens: u32 = req
-                .messages
-                .iter()
-                .map(|m| (m.content.len() as u32) / 4 + 1)
-                .sum();
-            let estimated_max_cost =
-                backend.calculate_cost(estimated_prompt_tokens, req.max_tokens);
-            let preauth_ceiling = estimated_max_cost.saturating_mul(3) / 2;
-            if estimated_max_cost > 0 && preauth > preauth_ceiling {
-                return error_response(
-                    StatusCode::BAD_REQUEST,
-                    format!(
-                        "pre-auth amount ({preauth}) exceeds 1.5x estimated max cost ({estimated_max_cost}) — \
-                         contract settles full pre-auth, reduce amount to avoid overcharging"
-                    ),
-                    "billing_error",
-                    "excessive_preauth",
-                );
-            }
-
-            // 5a. Per-account concurrency limit (checked via shared AppState map).
-            let max_per_account = state.server_config.max_per_account_requests;
-            if max_per_account > 0 {
-                let spend_auth = req.spend_auth.as_ref().unwrap();
-                let mut map = state
-                    .active_per_account
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner());
-                let count = map.entry(spend_auth.commitment.clone()).or_insert(0);
-                if *count >= max_per_account {
-                    return error_response(
-                        StatusCode::TOO_MANY_REQUESTS,
-                        format!("account has {count} active requests (limit: {max_per_account})"),
-                        "rate_limit_error",
-                        "per_account_limit",
-                    );
-                }
-                *count += 1;
-            }
-
-            // 5b. Check vLLM health before committing gas
-            if !backend.vllm.is_healthy().await {
-                return error_response(
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    "inference backend is unavailable — billing not initiated".to_string(),
-                    "upstream_error",
-                    "vllm_unhealthy",
-                );
-            }
-
-            if let Err(e) = state
-                .billing
-                .authorize_spend(req.spend_auth.as_ref().unwrap())
-                .await
-            {
-                tracing::error!(error = %e, "authorizeSpend failed");
-                return error_response(
-                    StatusCode::PAYMENT_REQUIRED,
-                    format!("billing authorization failed: {e}"),
-                    "billing_error",
-                    "authorization_failed",
-                );
-            }
-
-            // Record the nonce as used AFTER successful on-chain authorization
-            let spend_auth = req.spend_auth.as_ref().unwrap();
-            let nonce_key = (spend_auth.commitment.clone(), spend_auth.nonce);
-            state
-                .nonce_store
-                .insert(
-                    nonce_key,
-                    spend_auth.expiry,
-                    state.billing_config.clock_skew_tolerance_secs,
-                )
-                .await;
-        }
-    }
-
-    // 6. Dispatch to streaming or non-streaming path
-    if req.stream {
-        handle_streaming(state, req, preauth_amount, metrics_guard, permit).await
     } else {
-        handle_non_streaming(state, req, preauth_amount, metrics_guard, permit).await
+        None
+    };
+
+    // Dispatch to streaming or non-streaming path.
+    if req.stream {
+        handle_streaming(state, req, authorized, metrics_guard, permit).await
+    } else {
+        handle_non_streaming(state, req, authorized, metrics_guard, permit).await
     }
 }
 
 async fn handle_non_streaming(
     state: AppState,
     req: ChatCompletionRequest,
-    preauth_amount: Option<u64>,
+    authorized: Option<AuthorizedPayment>,
     mut metrics_guard: RequestGuard,
     _permit: OwnedSemaphorePermit,
 ) -> Response {
@@ -463,26 +345,18 @@ async fn handle_non_streaming(
     );
     metrics_guard.set_success();
 
-    // Post-response settlement (spawned so response returns immediately)
-    if let (Some(spend_auth), Some(preauth)) = (req.spend_auth, preauth_amount) {
+    // Post-response settlement (spawned so the response returns immediately).
+    // `authorized` (with its per-account guard) moves into the task, so the
+    // account slot stays held through settlement and the rail is dispatched by
+    // the shared `settle_request` — shielded claims, direct no-ops.
+    if let Some(auth) = authorized {
         let actual_cost = backend.calculate_cost(
             vllm_response.usage.prompt_tokens,
             vllm_response.usage.completion_tokens,
         );
-        let billing = state.billing.clone();
-        let recovery_queue = state.settlement_recovery_queue.clone();
+        let state = state.clone();
         let handle = tokio::spawn(async move {
-            if let Err(e) = settle_billing_with_recovery(
-                &billing,
-                &spend_auth,
-                preauth,
-                actual_cost,
-                recovery_queue.as_deref(),
-            )
-            .await
-            {
-                tracing::error!(error = %e, "on-chain settlement failed — manual recovery required");
-            }
+            settle_request(&state, &auth, actual_cost).await;
         });
         backend.track_settlement(handle);
     }
@@ -493,7 +367,7 @@ async fn handle_non_streaming(
 async fn handle_streaming(
     state: AppState,
     req: ChatCompletionRequest,
-    preauth_amount: Option<u64>,
+    authorized: Option<AuthorizedPayment>,
     mut metrics_guard: RequestGuard,
     permit: OwnedSemaphorePermit,
 ) -> Response {
@@ -514,10 +388,9 @@ async fn handle_streaming(
 
     let byte_stream = upstream.bytes_stream();
 
-    let spend_auth_for_settlement = req.spend_auth;
-    let billing_for_settlement = state.billing.clone();
-    let recovery_queue_for_settlement = state.settlement_recovery_queue.clone();
-    // Clone needed for cost calculation in the background settlement task.
+    // The authorization (with its per-account guard) moves into the settlement
+    // task, so the account slot is held across the whole stream + settlement.
+    let authorized_for_settlement = authorized;
     let state_for_settlement = state.clone();
 
     let (usage_tx, usage_rx) = tokio::sync::oneshot::channel::<(u32, u32)>();
@@ -643,21 +516,9 @@ async fn handle_streaming(
                 metrics_guard.set_tokens(prompt_tokens, completion_tokens);
                 metrics_guard.set_success();
 
-                if let (Some(ref spend_auth), Some(preauth)) =
-                    (&spend_auth_for_settlement, preauth_amount)
-                {
+                if let Some(ref auth) = authorized_for_settlement {
                     let actual_cost = backend.calculate_cost(prompt_tokens, completion_tokens);
-                    if let Err(e) = settle_billing_with_recovery(
-                        &billing_for_settlement,
-                        spend_auth,
-                        preauth,
-                        actual_cost,
-                        recovery_queue_for_settlement.as_deref(),
-                    )
-                    .await
-                    {
-                        tracing::error!(error = %e, "on-chain settlement failed — manual recovery required");
-                    }
+                    settle_request(&state_for_settlement, auth, actual_cost).await;
                 }
             }
             Err(_) => {
@@ -665,21 +526,9 @@ async fn handle_streaming(
                     "streaming response ended without usage data — settling with max_tokens fallback"
                 );
 
-                if let (Some(ref spend_auth), Some(preauth)) =
-                    (&spend_auth_for_settlement, preauth_amount)
-                {
+                if let Some(ref auth) = authorized_for_settlement {
                     let actual_cost = backend.calculate_cost(0, max_tokens_for_fallback);
-                    if let Err(e) = settle_billing_with_recovery(
-                        &billing_for_settlement,
-                        spend_auth,
-                        preauth,
-                        actual_cost,
-                        recovery_queue_for_settlement.as_deref(),
-                    )
-                    .await
-                    {
-                        tracing::error!(error = %e, "on-chain settlement failed — manual recovery required");
-                    }
+                    settle_request(&state_for_settlement, auth, actual_cost).await;
                 }
             }
         }
