@@ -10,6 +10,7 @@ use wiremock::{
 use llm_inference::config::{
     BillingConfig, GpuConfig, OperatorConfig, ServerConfig, TangleConfig, VllmConfig,
 };
+use tangle_inference_core::PaymentMode;
 use llm_inference::server::VllmBackend;
 use llm_inference::{AppStateBuilder, BillingClient, NonceStore};
 
@@ -36,6 +37,8 @@ fn test_config(vllm_port: u16) -> OperatorConfig {
             hf_token: None,
             download_dir: None,
             startup_timeout_secs: 10,
+            external: false,
+            tuner_app_shared_secret: None,
         },
         server: ServerConfig {
             host: "0.0.0.0".into(),
@@ -48,6 +51,7 @@ fn test_config(vllm_port: u16) -> OperatorConfig {
             max_per_account_requests: 0,
         },
         billing: BillingConfig {
+            payment_mode: PaymentMode::None,
             billing_required: false,
             max_spend_per_request: 1_000_000,
             min_credit_balance: 1000,
@@ -56,6 +60,7 @@ fn test_config(vllm_port: u16) -> OperatorConfig {
             clock_skew_tolerance_secs: 30,
             max_gas_price_gwei: 0,
             nonce_store_path: None,
+            direct_replay_store_path: None,
             payment_token_address: None,
         },
         gpu: GpuConfig {
@@ -737,8 +742,8 @@ async fn test_max_spend_per_request_rejection() {
             "messages": [{"role": "user", "content": "Hi"}],
             "spend_auth": {
                 "commitment": "0x0000000000000000000000000000000000000000000000000000000000000001",
-                "service_id": 1,
-                "job_index": 0,
+                "serviceId": 1,
+                "jobIndex": 0,
                 "amount": "99999999",
                 "operator": "0x0000000000000000000000000000000000000001",
                 "nonce": 1,

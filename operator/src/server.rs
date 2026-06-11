@@ -33,6 +33,7 @@ use tangle_inference_core::server::{
     error_response, extract_x402_spend_auth, payment_required,
     settle_billing_with_recovery, validate_spend_auth,
 };
+use tangle_inference_core::payment::PaymentProof;
 use tangle_inference_core::{
     detect_gpus, AppState, CostModel, CostParams, GpuInfo, PerTokenCostModel, RequestGuard,
     SpendAuthPayload,
@@ -181,6 +182,14 @@ pub struct ChatCompletionRequest {
     /// ShieldedCredits spend authorization (required when billing_required is true).
     /// Can also be provided via x402 headers (X-Payment-Signature).
     pub spend_auth: Option<SpendAuthPayload>,
+
+    /// Plain-crypto payment proof (the Direct rail): a `DirectTransfer` carrying
+    /// the tx hash of an ERC-20 transfer to the operator. An alternative to
+    /// `spend_auth` — pay-per-call in USDC with no shielded pool. Authorized
+    /// through the generic payment provider (active when payment_mode is
+    /// `direct` or `both`); ignored under `shielded`-only config.
+    #[serde(default)]
+    pub payment: Option<PaymentProof>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -241,6 +250,9 @@ fn backend_from(state: &AppState) -> &VllmBackend {
         .expect("AppState backend is VllmBackend (checked in server::start)")
 }
 
+/// Header used by trusted app callers to bypass SpendAuth validation.
+const X_TUNER_APP_SECRET: &str = "x-tuner-app-secret";
+
 async fn chat_completions(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -249,6 +261,18 @@ async fn chat_completions(
     let backend = backend_from(&state);
     let model_name = req.model.as_deref().unwrap_or(&backend.config.vllm.model);
     let metrics_guard = RequestGuard::new(model_name);
+
+    // 0. Trusted app bypass: if x-tuner-app-secret matches the configured
+    //    shared secret, skip all billing validation and serve directly.
+    //    This is the defense-in-depth layer that makes private models
+    //    inaccessible even if someone discovers the operator endpoint URL.
+    let trusted_app_call = backend.config.vllm.tuner_app_shared_secret.as_ref().and_then(|secret| {
+        headers
+            .get(X_TUNER_APP_SECRET)
+            .and_then(|h| h.to_str().ok())
+            .filter(|h| *h == secret)
+            .map(|_| true)
+    }).unwrap_or(false);
 
     // 1. Acquire semaphore permit
     let permit: OwnedSemaphorePermit = match state.semaphore.clone().try_acquire_owned() {
@@ -263,108 +287,153 @@ async fn chat_completions(
         }
     };
 
-    // 2. x402 flow: if no spend_auth in body, check X-Payment-Signature header
-    if req.spend_auth.is_none() {
-        if let Some(x402_auth) = extract_x402_spend_auth(&headers) {
-            req.spend_auth = Some(x402_auth);
+    // Direct rail: a verified plain-USDC payment satisfies billing without a
+    // SpendAuth. Set below; consumed by the billing-required gate.
+    let mut direct_paid: Option<u64> = None;
+
+    // Trusted apps skip the entire x402 / SpendAuth flow
+    if !trusted_app_call {
+        // 2. x402 flow: if no spend_auth in body, check X-Payment-Signature header
+        if req.spend_auth.is_none() {
+            if let Some(x402_auth) = extract_x402_spend_auth(&headers) {
+                req.spend_auth = Some(x402_auth);
+            }
         }
-    }
 
-    // 3. Enforce billing requirement — return 402 Payment Required if missing
-    if state.billing_config.billing_required && req.spend_auth.is_none() {
-        // Estimate for a typical 1000-input/512-output request
-        let estimated = backend.calculate_cost(1000, 512);
-        return payment_required(
-            &state.billing_config,
-            &state.tangle_config,
-            state.operator_address,
-            estimated,
-        );
-    }
-
-    // 4. Validate SpendAuth (signature, account info, nonce replay, etc).
-    let preauth_amount: Option<u64> = if let Some(ref spend_auth) = req.spend_auth {
-        match validate_spend_auth(&state, spend_auth).await {
-            Ok(amt) => Some(amt),
-            Err(resp) => return resp,
+        // 2b. Direct rail (plain USDC, no shielded pool): a DirectTransfer proof
+        //     is verified on-chain by the generic payment provider, which accepts
+        //     it only under payment_mode = direct | both. No preauth ceiling and
+        //     no nonce store — the provider's persistent replay store guards reuse
+        //     and the transfer already happened (settle is a no-op). Shielded
+        //     SpendAuth takes precedence when both are somehow present.
+        if req.spend_auth.is_none() {
+            if let Some(proof @ PaymentProof::DirectTransfer { .. }) = req.payment.clone() {
+                // Don't accept payment we can't serve.
+                if !backend.vllm.is_healthy().await {
+                    return error_response(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "inference backend is unavailable — payment not accepted".to_string(),
+                        "upstream_error",
+                        "vllm_unhealthy",
+                    );
+                }
+                match state.payment_provider.authorize(&proof).await {
+                    Ok(amount) => direct_paid = Some(amount),
+                    Err(e) => {
+                        return error_response(
+                            StatusCode::PAYMENT_REQUIRED,
+                            format!("direct payment verification failed: {e}"),
+                            "billing_error",
+                            "authorization_failed",
+                        );
+                    }
+                }
+            }
         }
-    } else {
-        None
-    };
 
-    // 5. Cost sanity check: pre-auth amount cannot exceed 1.5x estimated max cost.
-    if let (Some(_), Some(preauth)) = (&req.spend_auth, preauth_amount) {
-        let estimated_prompt_tokens: u32 = req
-            .messages
-            .iter()
-            .map(|m| (m.content.len() as u32) / 4 + 1)
-            .sum();
-        let estimated_max_cost = backend.calculate_cost(estimated_prompt_tokens, req.max_tokens);
-        let preauth_ceiling = estimated_max_cost.saturating_mul(3) / 2;
-        if estimated_max_cost > 0 && preauth > preauth_ceiling {
-            return error_response(
-                StatusCode::BAD_REQUEST,
-                format!(
-                    "pre-auth amount ({preauth}) exceeds 1.5x estimated max cost ({estimated_max_cost}) — \
-                     contract settles full pre-auth, reduce amount to avoid overcharging"
-                ),
-                "billing_error",
-                "excessive_preauth",
+        // 3. Enforce billing requirement — satisfied by EITHER rail.
+        if state.billing_config.billing_required
+            && req.spend_auth.is_none()
+            && direct_paid.is_none()
+        {
+            // Estimate for a typical 1000-input/512-output request
+            let estimated = backend.calculate_cost(1000, 512);
+            return payment_required(
+                &state.billing_config,
+                &state.tangle_config,
+                state.operator_address,
+                estimated,
             );
         }
+    }
 
-        // 5a. Per-account concurrency limit (checked via shared AppState map).
-        let max_per_account = state.server_config.max_per_account_requests;
-        if max_per_account > 0 {
-            let spend_auth = req.spend_auth.as_ref().unwrap();
-            let mut map = state.active_per_account.lock().unwrap_or_else(|e| e.into_inner());
-            let count = map.entry(spend_auth.commitment.clone()).or_insert(0);
-            if *count >= max_per_account {
+    let mut preauth_amount: Option<u64> = None;
+
+    if !trusted_app_call {
+        // 4. Validate SpendAuth (signature, account info, nonce replay, etc).
+        preauth_amount = if let Some(ref spend_auth) = req.spend_auth {
+            match validate_spend_auth(&state, spend_auth).await {
+                Ok(amt) => Some(amt),
+                Err(resp) => return resp,
+            }
+        } else {
+            None
+        };
+
+        // 5. Cost sanity check: pre-auth amount cannot exceed 1.5x estimated max cost.
+        if let (Some(_), Some(preauth)) = (&req.spend_auth, preauth_amount) {
+            let estimated_prompt_tokens: u32 = req
+                .messages
+                .iter()
+                .map(|m| (m.content.len() as u32) / 4 + 1)
+                .sum();
+            let estimated_max_cost = backend.calculate_cost(estimated_prompt_tokens, req.max_tokens);
+            let preauth_ceiling = estimated_max_cost.saturating_mul(3) / 2;
+            if estimated_max_cost > 0 && preauth > preauth_ceiling {
                 return error_response(
-                    StatusCode::TOO_MANY_REQUESTS,
-                    format!("account has {count} active requests (limit: {max_per_account})"),
-                    "rate_limit_error",
-                    "per_account_limit",
+                    StatusCode::BAD_REQUEST,
+                    format!(
+                        "pre-auth amount ({preauth}) exceeds 1.5x estimated max cost ({estimated_max_cost}) — \
+                         contract settles full pre-auth, reduce amount to avoid overcharging"
+                    ),
+                    "billing_error",
+                    "excessive_preauth",
                 );
             }
-            *count += 1;
-        }
 
-        // 5b. Check vLLM health before committing gas
-        if !backend.vllm.is_healthy().await {
-            return error_response(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "inference backend is unavailable — billing not initiated".to_string(),
-                "upstream_error",
-                "vllm_unhealthy",
-            );
-        }
+            // 5a. Per-account concurrency limit (checked via shared AppState map).
+            let max_per_account = state.server_config.max_per_account_requests;
+            if max_per_account > 0 {
+                let spend_auth = req.spend_auth.as_ref().unwrap();
+                let mut map = state.active_per_account.lock().unwrap_or_else(|e| e.into_inner());
+                let count = map.entry(spend_auth.commitment.clone()).or_insert(0);
+                if *count >= max_per_account {
+                    return error_response(
+                        StatusCode::TOO_MANY_REQUESTS,
+                        format!("account has {count} active requests (limit: {max_per_account})"),
+                        "rate_limit_error",
+                        "per_account_limit",
+                    );
+                }
+                *count += 1;
+            }
 
-        if let Err(e) = state
-            .billing
-            .authorize_spend(req.spend_auth.as_ref().unwrap())
-            .await
-        {
-            tracing::error!(error = %e, "authorizeSpend failed");
-            return error_response(
-                StatusCode::PAYMENT_REQUIRED,
-                format!("billing authorization failed: {e}"),
-                "billing_error",
-                "authorization_failed",
-            );
-        }
+            // 5b. Check vLLM health before committing gas
+            if !backend.vllm.is_healthy().await {
+                return error_response(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "inference backend is unavailable — billing not initiated".to_string(),
+                    "upstream_error",
+                    "vllm_unhealthy",
+                );
+            }
 
-        // Record the nonce as used AFTER successful on-chain authorization
-        let spend_auth = req.spend_auth.as_ref().unwrap();
-        let nonce_key = (spend_auth.commitment.clone(), spend_auth.nonce);
-        state
-            .nonce_store
-            .insert(
-                nonce_key,
-                spend_auth.expiry,
-                state.billing_config.clock_skew_tolerance_secs,
-            )
-            .await;
+            if let Err(e) = state
+                .billing
+                .authorize_spend(req.spend_auth.as_ref().unwrap())
+                .await
+            {
+                tracing::error!(error = %e, "authorizeSpend failed");
+                return error_response(
+                    StatusCode::PAYMENT_REQUIRED,
+                    format!("billing authorization failed: {e}"),
+                    "billing_error",
+                    "authorization_failed",
+                );
+            }
+
+            // Record the nonce as used AFTER successful on-chain authorization
+            let spend_auth = req.spend_auth.as_ref().unwrap();
+            let nonce_key = (spend_auth.commitment.clone(), spend_auth.nonce);
+            state
+                .nonce_store
+                .insert(
+                    nonce_key,
+                    spend_auth.expiry,
+                    state.billing_config.clock_skew_tolerance_secs,
+                )
+                .await;
+        }
     }
 
     // 6. Dispatch to streaming or non-streaming path
