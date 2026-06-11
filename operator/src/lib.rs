@@ -4,13 +4,12 @@ pub mod server;
 pub mod vllm;
 
 // Re-export shared infrastructure so downstream crates can `use llm_inference::*`.
+pub use tangle_inference_core::server::{
+    error_response, extract_x402_spend_auth, payment_required, settle_billing, validate_spend_auth,
+};
 pub use tangle_inference_core::{
     detect_gpus, parse_nvidia_smi_output, AppState, AppStateBuilder, BillingClient, CostModel,
     CostParams, GpuInfo, NonceStore, PerTokenCostModel, RequestGuard, SpendAuthPayload,
-};
-pub use tangle_inference_core::server::{
-    error_response, extract_x402_spend_auth, payment_required, settle_billing,
-    validate_spend_auth,
 };
 // Re-export metrics module for tests/downstream use.
 pub use tangle_inference_core::metrics;
@@ -104,18 +103,17 @@ pub fn init_for_testing(base_url: &str, model: &str) {
 // --- Router ---
 
 pub fn router() -> Router {
-    Router::new().route(
-        INFERENCE_JOB,
-        run_inference.layer(TangleLayer),
-    )
+    Router::new().route(INFERENCE_JOB, run_inference.layer(TangleLayer))
 }
 
 /// Direct inference call — same logic as run_inference but without TangleArg.
 /// Used for testing without the Tangle context.
-pub async fn run_inference_direct(request: &InferenceRequest) -> Result<InferenceResult, RunnerError> {
-    let endpoint = VLLM_ENDPOINT.get().ok_or_else(|| {
-        RunnerError::Other("vLLM endpoint not registered".into())
-    })?;
+pub async fn run_inference_direct(
+    request: &InferenceRequest,
+) -> Result<InferenceResult, RunnerError> {
+    let endpoint = VLLM_ENDPOINT
+        .get()
+        .ok_or_else(|| RunnerError::Other("vLLM endpoint not registered".into()))?;
 
     let temperature = request.temperature as f32 / 1000.0;
     let vllm_body = serde_json::json!({
@@ -126,13 +124,23 @@ pub async fn run_inference_direct(request: &InferenceRequest) -> Result<Inferenc
         "stream": false,
     });
 
-    let resp = endpoint.client.post(&endpoint.url).json(&vllm_body).send().await
+    let resp = endpoint
+        .client
+        .post(&endpoint.url)
+        .json(&vllm_body)
+        .send()
+        .await
         .map_err(|e| RunnerError::Other(format!("vLLM request failed: {e}").into()))?;
-    let body: serde_json::Value = resp.json().await
+    let body: serde_json::Value = resp
+        .json()
+        .await
         .map_err(|e| RunnerError::Other(format!("vLLM parse failed: {e}").into()))?;
 
     Ok(InferenceResult {
-        text: body["choices"][0]["message"]["content"].as_str().unwrap_or("").to_string(),
+        text: body["choices"][0]["message"]["content"]
+            .as_str()
+            .unwrap_or("")
+            .to_string(),
         promptTokens: body["usage"]["prompt_tokens"].as_u64().unwrap_or(0) as u32,
         completionTokens: body["usage"]["completion_tokens"].as_u64().unwrap_or(0) as u32,
     })

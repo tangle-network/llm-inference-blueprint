@@ -2,11 +2,14 @@
 //!
 //! Uses SeededTangleTestnet from the Blueprint SDK.
 
-use std::time::Duration;
 use alloy_sol_types::SolValue;
-use anyhow::{Result, ensure};
-use wiremock::{MockServer, Mock, ResponseTemplate, matchers::{method, path}};
+use anyhow::{ensure, Result};
 use llm_inference::{InferenceRequest, INFERENCE_JOB};
+use std::time::Duration;
+use wiremock::{
+    matchers::{method, path},
+    Mock, MockServer, ResponseTemplate,
+};
 
 /// Test that the router processes a job correctly when the vLLM backend responds.
 /// This doesn't use SeededTangleTestnet (which requires specific fixtures),
@@ -40,11 +43,21 @@ async fn test_router_processes_job_with_real_vllm_backend() -> Result<()> {
 
     match result {
         Ok(inference_result) => {
-            ensure!(inference_result.text == "4", "expected '4', got '{}'", inference_result.text);
+            ensure!(
+                inference_result.text == "4",
+                "expected '4', got '{}'",
+                inference_result.text
+            );
             ensure!(inference_result.promptTokens == 5, "wrong prompt tokens");
-            ensure!(inference_result.completionTokens == 1, "wrong completion tokens");
+            ensure!(
+                inference_result.completionTokens == 1,
+                "wrong completion tokens"
+            );
             println!("✓ Inference result: '{}'", inference_result.text);
-            println!("✓ Tokens: prompt={}, completion={}", inference_result.promptTokens, inference_result.completionTokens);
+            println!(
+                "✓ Tokens: prompt={}, completion={}",
+                inference_result.promptTokens, inference_result.completionTokens
+            );
         }
         Err(e) => panic!("Inference failed: {e}"),
     }
