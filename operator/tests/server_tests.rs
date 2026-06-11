@@ -10,9 +10,9 @@ use wiremock::{
 use llm_inference::config::{
     BillingConfig, GpuConfig, OperatorConfig, ServerConfig, TangleConfig, VllmConfig,
 };
-use tangle_inference_core::PaymentMode;
 use llm_inference::server::VllmBackend;
 use llm_inference::{AppStateBuilder, BillingClient, NonceStore};
+use tangle_inference_core::PaymentRails;
 
 fn test_config(vllm_port: u16) -> OperatorConfig {
     OperatorConfig {
@@ -38,7 +38,6 @@ fn test_config(vllm_port: u16) -> OperatorConfig {
             download_dir: None,
             startup_timeout_secs: 10,
             external: false,
-            tuner_app_shared_secret: None,
         },
         server: ServerConfig {
             host: "0.0.0.0".into(),
@@ -51,7 +50,7 @@ fn test_config(vllm_port: u16) -> OperatorConfig {
             max_per_account_requests: 0,
         },
         billing: BillingConfig {
-            payment_mode: PaymentMode::None,
+            payment_rails: PaymentRails::NONE,
             billing_required: false,
             max_spend_per_request: 1_000_000,
             min_credit_balance: 1000,
@@ -122,8 +121,12 @@ async fn test_request_guard_tracks_active_requests() {
 async fn test_request_guard_records_tokens_on_drop() {
     use llm_inference::metrics::{RequestGuard, TOKENS_TOTAL};
 
-    let prompt_before = TOKENS_TOTAL.with_label_values(&["test-model", "prompt"]).get();
-    let completion_before = TOKENS_TOTAL.with_label_values(&["test-model", "completion"]).get();
+    let prompt_before = TOKENS_TOTAL
+        .with_label_values(&["test-model", "prompt"])
+        .get();
+    let completion_before = TOKENS_TOTAL
+        .with_label_values(&["test-model", "completion"])
+        .get();
 
     let mut guard = RequestGuard::new("test-model");
     guard.set_tokens(100, 50);
@@ -131,11 +134,17 @@ async fn test_request_guard_records_tokens_on_drop() {
     drop(guard);
 
     assert!(
-        TOKENS_TOTAL.with_label_values(&["test-model", "prompt"]).get() >= prompt_before + 100,
+        TOKENS_TOTAL
+            .with_label_values(&["test-model", "prompt"])
+            .get()
+            >= prompt_before + 100,
         "prompt tokens should have increased by at least 100"
     );
     assert!(
-        TOKENS_TOTAL.with_label_values(&["test-model", "completion"]).get() >= completion_before + 50,
+        TOKENS_TOTAL
+            .with_label_values(&["test-model", "completion"])
+            .get()
+            >= completion_before + 50,
         "completion tokens should have increased by at least 50"
     );
 }
@@ -144,13 +153,18 @@ async fn test_request_guard_records_tokens_on_drop() {
 async fn test_request_guard_defaults_to_error() {
     use llm_inference::metrics::{RequestGuard, REQUEST_COUNT};
 
-    let error_before = REQUEST_COUNT.with_label_values(&["test-model", "error"]).get();
+    let error_before = REQUEST_COUNT
+        .with_label_values(&["test-model", "error"])
+        .get();
 
     let guard = RequestGuard::new("test-model");
     drop(guard);
 
     assert!(
-        REQUEST_COUNT.with_label_values(&["test-model", "error"]).get() >= error_before + 1,
+        REQUEST_COUNT
+            .with_label_values(&["test-model", "error"])
+            .get()
+            >= error_before + 1,
         "error count should have increased by at least 1"
     );
 }
@@ -159,14 +173,19 @@ async fn test_request_guard_defaults_to_error() {
 async fn test_request_guard_records_success() {
     use llm_inference::metrics::{RequestGuard, REQUEST_COUNT};
 
-    let success_before = REQUEST_COUNT.with_label_values(&["test-model", "success"]).get();
+    let success_before = REQUEST_COUNT
+        .with_label_values(&["test-model", "success"])
+        .get();
 
     let mut guard = RequestGuard::new("test-model");
     guard.set_success();
     drop(guard);
 
     assert!(
-        REQUEST_COUNT.with_label_values(&["test-model", "success"]).get() >= success_before + 1,
+        REQUEST_COUNT
+            .with_label_values(&["test-model", "success"])
+            .get()
+            >= success_before + 1,
         "success count should have increased by at least 1"
     );
 }

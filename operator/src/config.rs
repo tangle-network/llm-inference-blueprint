@@ -85,14 +85,6 @@ pub struct VllmConfig {
     /// no GPU — used for local end-to-end testing.
     #[serde(default)]
     pub external: bool,
-
-    /// Optional shared secret for trusted app callers (e.g. tuner-agent).
-    /// When a request includes the `x-tuner-app-secret` header matching this
-    /// value, the operator bypasses SpendAuth billing validation entirely.
-    /// This enables app-scoped private models that are inaccessible to
-    /// general router users even if they discover the endpoint URL.
-    #[serde(default)]
-    pub tuner_app_shared_secret: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

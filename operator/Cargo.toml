@@ -34,10 +34,10 @@ hex = { workspace = true }
 k256 = { workspace = true }
 
 # Shared inference operator infrastructure (billing, metrics, health, server helpers).
-# Pinned to the direct-rail-payment branch (persistent replay store + dual-rail
-# CompositeProvider) until it merges to master — the Direct rail needs that core
+# Pinned to the payment-rails branch (PaymentRails set + PaymentRouter + Direct rail)
+# until it merges to master. Repoint to branch="master" after merge.
 # hardening to be replay-safe. Repoint to branch="master" after merge.
-tangle-inference-core = { git = "https://github.com/tangle-network/tangle-inference-core", rev = "8b1b2f34954865ba9df496de551b65085aea736c" }
+tangle-inference-core = { git = "https://github.com/tangle-network/tangle-inference-core", rev = "4476f0779279f01d3cf9c6f09098510472740776" }
 
 # Web framework (for OpenAI-compatible HTTP server)
 axum = { version = "0.7", features = ["json", "macros"] }
