@@ -9,7 +9,7 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/tangle-network/llm-inference-blueprint"
 
 [workspace.dependencies]
-blueprint-sdk = { version = "0.2.0-alpha.9", features = ["std", "tangle", "macros"] }
+blueprint-sdk = { git = "https://github.com/tangle-network/blueprint", rev = "54f06f2e8cc697435c862f9e24fcefe45aab3324", package = "blueprint-sdk", features = ["std", "tangle", "macros"] }
 alloy = { version = "1", features = ["full", "signer-local", "provider-http"] }
 alloy-sol-types = "1"
 tokio = { version = "1", features = ["full"] }
@@ -22,14 +22,7 @@ anyhow = "1"
 thiserror = "2"
 hex = "0.4"
 k256 = { version = "0.13", features = ["ecdsa"] }
-prometheus = "0.13"
 futures-util = "0.3"
 tokio-stream = "0.1"
 
-# Point the blueprint-sdk deps at our local checkout so we reuse its Cargo.lock
-# (has a pre-yank copy of core2 resolved).
-# core2 was entirely yanked from crates.io (all versions). libp2p-core ->
-# multihash pulls in core2 = "^0.4.0" transitively. Point at the local cargo
-# cache copy so cargo doesn't try to re-resolve from the registry.
-[patch.crates-io]
-core2 = { git = "https://github.com/tangle-network/core2", branch = "master" }
+# Pin the Blueprint SDK until the patched alpha.13 release is published.

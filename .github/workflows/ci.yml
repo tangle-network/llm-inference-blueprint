@@ -23,7 +23,8 @@ jobs:
           - check: test
             command: cargo test --workspace
           - check: audit
-            command: cargo install cargo-audit && cargo audit
+            # rust-bls-bn254 is only available through Blueprint's disabled eigenlayer feature.
+            command: cargo install cargo-audit --version 0.22.1 --locked && cargo audit --ignore RUSTSEC-2025-0055
 
     steps:
       - uses: actions/checkout@v4
