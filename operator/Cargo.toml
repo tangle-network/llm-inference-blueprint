@@ -37,7 +37,7 @@ k256 = { workspace = true }
 # Pinned to the #2 merge commit on master (PaymentRails + PaymentRouter + Direct
 # rail + rail-agnostic orchestration: resolve_payment_proof/authorize_request/
 # settle_request). Pinned by SHA for reproducible CI; bump as core advances.
-tangle-inference-core = { git = "https://github.com/tangle-network/tangle-inference-core", rev = "bab62259479fd79a658ea9dc4ab235df466fa3fc" }
+tangle-inference-core = { git = "https://github.com/tangle-network/tangle-inference-core", rev = "c7e11063a2ba30c662c64356a73bd81d4a03a267", default-features = false, features = ["billing", "http", "metrics"] }
 
 # Web framework (for OpenAI-compatible HTTP server)
 axum = { version = "0.7", features = ["json", "macros"] }
@@ -59,7 +59,7 @@ uuid = { version = "1", features = ["v4"] }
 serde_json = { workspace = true }
 
 [dev-dependencies]
-blueprint-anvil-testing-utils = { git = "https://github.com/tangle-network/blueprint", rev = "4c85bd163da054568ba4c7e1689510134d59fbc5", package = "blueprint-anvil-testing-utils" }
+blueprint-anvil-testing-utils = { git = "https://github.com/tangle-network/blueprint", rev = "be8bd303260d3b1e1df6624eeac92b3ce1f40c38", package = "blueprint-anvil-testing-utils" }
 wiremock = "0.6"
 alloy-primitives = "1"
 alloy-sol-types = "1"

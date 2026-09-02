@@ -9,7 +9,7 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/tangle-network/llm-inference-blueprint"
 
 [workspace.dependencies]
-blueprint-sdk = { git = "https://github.com/tangle-network/blueprint", rev = "4c85bd163da054568ba4c7e1689510134d59fbc5", package = "blueprint-sdk", features = ["std", "tangle", "macros"] }
+blueprint-sdk = { git = "https://github.com/tangle-network/blueprint", rev = "be8bd303260d3b1e1df6624eeac92b3ce1f40c38", package = "blueprint-sdk", features = ["std", "tangle", "macros"] }
 alloy = { version = "1", features = ["full", "signer-local", "provider-http"] }
 alloy-sol-types = "1"
 tokio = { version = "1", features = ["full"] }
