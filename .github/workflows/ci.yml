@@ -23,7 +23,7 @@ jobs:
           - check: test
             command: cargo test --workspace
           - check: audit
-            command: cargo install cargo-audit && cargo audit
+            command: cargo install cargo-audit --version 0.21.1 --locked && cargo audit
 
     steps:
       - uses: actions/checkout@v4
