@@ -59,7 +59,7 @@ uuid = { version = "1", features = ["v4"] }
 serde_json = { workspace = true }
 
 [dev-dependencies]
-blueprint-anvil-testing-utils = { git = "https://github.com/tangle-network/blueprint", rev = "a380ec1e6320a8e949a13410873154a4c1e2ff46", package = "blueprint-anvil-testing-utils" }
+blueprint-anvil-testing-utils = { git = "https://github.com/tangle-network/blueprint", rev = "54f06f2e8cc697435c862f9e24fcefe45aab3324", package = "blueprint-anvil-testing-utils" }
 wiremock = "0.6"
 alloy-primitives = "1"
 alloy-sol-types = "1"
