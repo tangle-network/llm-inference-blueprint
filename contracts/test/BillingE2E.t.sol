@@ -192,9 +192,101 @@ contract BillingE2ETest is Test {
     }
 
     // ═══════════════════════════════════════════════════════════════════════
-    // HELPERS
+    // METERED SETTLEMENT (settlePayment) — operator charges actual usage, the
+    // contract refunds the unused pre-auth in the same tx. This is the flow the
+    // operator stack now uses after serving inference.
     // ═══════════════════════════════════════════════════════════════════════
 
+    /// @notice actual < cap: operator receives the actual metered amount and
+    ///         the user is refunded (cap - actual) to their credit balance.
+    function test_meteredSettlement_partialRefund() public {
+        uint256 cap = 0.05 ether;
+        uint256 actual = 0.02 ether;
+
+        IShieldedCredits.SpendAuth memory auth = _signSpend(1, 0, cap, 0);
+        bytes32 authHash = credits.authorizeSpend(auth);
+
+        // Pre-auth locks the full cap.
+        assertEq(credits.getAccount(commitment).balance, CREDIT_AMOUNT - cap);
+
+        vm.prank(operator);
+        credits.settlePayment(authHash, operator, actual);
+
+        // Operator receives exactly the actual metered amount.
+        assertEq(token.balanceOf(operator), actual);
+        // User is refunded cap - actual on-chain.
+        IShieldedCredits.CreditAccountView memory acct = credits.getAccount(commitment);
+        assertEq(acct.balance, CREDIT_AMOUNT - actual);
+        assertEq(acct.totalSpent, actual);
+    }
+
+    /// @notice actual == cap: operator receives the full pre-auth, no refund.
+    function test_meteredSettlement_fullAmountNoRefund() public {
+        uint256 cap = 0.05 ether;
+
+        IShieldedCredits.SpendAuth memory auth = _signSpend(1, 0, cap, 0);
+        bytes32 authHash = credits.authorizeSpend(auth);
+
+        vm.prank(operator);
+        credits.settlePayment(authHash, operator, cap);
+
+        assertEq(token.balanceOf(operator), cap);
+        IShieldedCredits.CreditAccountView memory acct = credits.getAccount(commitment);
+        assertEq(acct.balance, CREDIT_AMOUNT - cap);
+        assertEq(acct.totalSpent, cap);
+    }
+
+    /// @notice actual > cap: the contract rejects — settlement can never
+    ///         exceed the pre-authorized amount.
+    function test_meteredSettlement_revertsAboveCap() public {
+        uint256 cap = 0.05 ether;
+
+        IShieldedCredits.SpendAuth memory auth = _signSpend(1, 0, cap, 0);
+        bytes32 authHash = credits.authorizeSpend(auth);
+
+        vm.prank(operator);
+        vm.expectRevert();
+        credits.settlePayment(authHash, operator, cap + 1);
+    }
+
+    /// @notice Fallback path parity: when usage metering is unavailable the
+    ///         operator still calls claimPayment, settling the full pre-auth —
+    ///         behavior identical to before metered settlement existed.
+    function test_claimPayment_fallbackClaimsFullPreauth() public {
+        uint256 cap = 0.05 ether;
+
+        IShieldedCredits.SpendAuth memory auth = _signSpend(1, 0, cap, 0);
+        bytes32 authHash = credits.authorizeSpend(auth);
+
+        vm.prank(operator);
+        credits.claimPayment(authHash, operator);
+
+        assertEq(token.balanceOf(operator), cap);
+        assertEq(credits.getAccount(commitment).balance, CREDIT_AMOUNT - cap);
+    }
+
+    /// @notice A settled auth cannot be settled or claimed twice.
+    function test_meteredSettlement_cannotDoubleSettle() public {
+        uint256 cap = 0.05 ether;
+
+        IShieldedCredits.SpendAuth memory auth = _signSpend(1, 0, cap, 0);
+        bytes32 authHash = credits.authorizeSpend(auth);
+
+        vm.prank(operator);
+        credits.settlePayment(authHash, operator, 0.02 ether);
+
+        vm.prank(operator);
+        vm.expectRevert();
+        credits.settlePayment(authHash, operator, 0.02 ether);
+
+        vm.prank(operator);
+        vm.expectRevert();
+        credits.claimPayment(authHash, operator);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // HELPERS
+    // ═══════════════════════════════════════════════════════════════════════
     function _signSpend(
         uint64 serviceId,
         uint8 jobIndex,

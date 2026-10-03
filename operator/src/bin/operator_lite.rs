@@ -1,7 +1,7 @@
 //! Minimal operator binary — runs the HTTP server + billing client without
 //! BlueprintRunner or Tangle Substrate. Used for E2E tests that exercise
 //! the real Rust operator code path (real signature verification, real
-//! authorizeSpend/claimPayment on-chain) without needing a full Tangle node.
+//! authorizeSpend/settlePayment on-chain) without needing a full Tangle node.
 //!
 //! Expects an external "vLLM" backend (which can actually be an Ollama proxy)
 //! reachable at `vllm.host:vllm.port`. This binary never spawns vLLM itself —
