@@ -20,7 +20,7 @@
 - [x] vLLM subprocess management (spawn, health check, shutdown, watchdog respawn)
 - [x] OpenAI-compatible HTTP API (/v1/chat/completions, /v1/models, /health, /health/gpu)
 - [x] SpendAuth off-chain verification (EIP-712 ecrecover)
-- [x] Billing client (authorizeSpend + claimPayment via alloy)
+- [x] Billing client (authorizeSpend + metered settlePayment via alloy; claimPayment fallback)
 - [x] GPU detection via nvidia-smi
 - [x] Tangle job handler (Router, TangleArg/TangleResult, ABI encoding)
 - [x] Streaming support (SSE for /v1/chat/completions with idle-chunk timeout)
@@ -31,7 +31,7 @@
 - [x] Per-account rate limiting (active request tracking per commitment)
 - [x] Nonce replay protection (persistent file-based store)
 - [x] vLLM stderr/stdout log draining and structured forwarding
-- [x] Pre-authorization mode (authorizeSpend called before serving, claimPayment after with metered cost)
+- [x] Pre-authorization mode (authorizeSpend called before serving, settlePayment after with metered cost — unused pre-auth refunded on-chain)
 
 ## Phase 3: SDK — Core Done, Discovery/Streaming TODO
 
@@ -78,7 +78,8 @@
 ### Billing: pre-authorize then meter
 - Off-chain ecrecover validates SpendAuth signature (instant, free).
 - On-chain `authorizeSpend()` reserves payment before inference starts.
-- After inference completes, `claimPayment()` claims metered actual cost.
+- After inference completes, `settlePayment()` charges the metered actual cost and refunds the unused pre-auth to the user's credit account in the same tx.
+- When usage metering is unavailable (streaming response without a usage chunk), the operator falls back to `claimPayment()` of the full pre-auth.
 - Operator is protected: payment is reserved before GPU work begins.
 
 ### Why tsUSD only?

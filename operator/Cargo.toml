@@ -34,10 +34,10 @@ hex = { workspace = true }
 k256 = { workspace = true }
 
 # Shared inference operator infrastructure (billing, metrics, health, server helpers).
-# Pinned to the #2 merge commit on master (PaymentRails + PaymentRouter + Direct
-# rail + rail-agnostic orchestration: resolve_payment_proof/authorize_request/
-# settle_request). Pinned by SHA for reproducible CI; bump as core advances.
-tangle-inference-core = { git = "https://github.com/tangle-network/tangle-inference-core", rev = "c7e11063a2ba30c662c64356a73bd81d4a03a267", default-features = false, features = ["billing", "http", "metrics"] }
+# Pinned to the #6 merge commit on master (metered settlement: settlePayment with
+# the actual metered cost + claimPayment full-pre-auth fallback; settle_request
+# takes Option<u64>). Pinned by SHA for reproducible CI; bump as core advances.
+tangle-inference-core = { git = "https://github.com/tangle-network/tangle-inference-core", rev = "8dd186be802d356a666942d57ee3ba6484f9e29a", default-features = false, features = ["billing", "http", "metrics"] }
 
 # Web framework (for OpenAI-compatible HTTP server)
 axum = { version = "0.7", features = ["json", "macros"] }

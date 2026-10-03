@@ -846,6 +846,240 @@ async fn test_config_debug_redacts_operator_key() {
     );
 }
 
+// ─── Metered settlement dispatch tests (mock JSON-RPC chain) ────────────
+//
+// Proves which ShieldedCredits method the operator's settlement path sends
+// on-chain, with real ABI-encoded calldata:
+//   - metered actual cost known → `settlePayment(authHash, recipient, actual)`
+//     (the contract refunds pre-auth − actual to the user's credit account),
+//   - metering unavailable → `claimPayment(authHash, recipient)` — the
+//     original full-pre-auth behavior, unchanged.
+// The refund mechanics themselves are proven on-chain by BillingE2E.t.sol.
+
+use tangle_inference_core::server::settle_billing;
+use tangle_inference_core::SpendAuthPayload;
+
+/// A minimal JSON-RPC mock: answers the calls alloy makes when sending a
+/// contract transaction and records every transaction payload sent.
+struct MockChain {
+    url: String,
+    sent_txs: Arc<std::sync::Mutex<Vec<String>>>,
+    _shutdown: tokio::sync::watch::Sender<bool>,
+}
+
+impl MockChain {
+    async fn start() -> Self {
+        let sent_txs = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let txs = sent_txs.clone();
+
+        let app = axum::Router::new().route(
+            "/",
+            axum::routing::post(move |body: axum::Json<serde_json::Value>| {
+                let txs = txs.clone();
+                async move {
+                    let id = body.get("id").cloned().unwrap_or(serde_json::json!(1));
+                    let method = body["method"].as_str().unwrap_or("");
+                    let result = match method {
+                        "eth_chainId" => serde_json::json!("0x7a69"), // 31337
+                        "eth_gasPrice" | "eth_maxPriorityFeePerGas" => {
+                            serde_json::json!("0x3b9aca00")
+                        }
+                        "eth_feeHistory" => serde_json::json!({
+                            "oldestBlock": "0x1",
+                            "baseFeePerGas": ["0x3b9aca00","0x3b9aca00","0x3b9aca00","0x3b9aca00","0x3b9aca00","0x3b9aca00","0x3b9aca00"],
+                            "gasUsedRatio": [0.5,0.5,0.5,0.5,0.5,0.5],
+                            "reward": [["0x3b9aca00"],["0x3b9aca00"],["0x3b9aca00"],["0x3b9aca00"],["0x3b9aca00"],["0x3b9aca00"]]
+                        }),
+                        "eth_estimateGas" => serde_json::json!("0x100000"),
+                        "eth_getTransactionCount" => serde_json::json!("0x0"),
+                        "eth_sendTransaction" => {
+                            let data = body["params"][0]["data"]
+                                .as_str()
+                                .unwrap_or_default()
+                                .to_string();
+                            txs.lock().unwrap().push(data);
+                            let n = txs.lock().unwrap().len();
+                            serde_json::json!(format!("0x{:064x}", n))
+                        }
+                        "eth_sendRawTransaction" => {
+                            // Alloy signs locally — the contract calldata is
+                            // embedded verbatim in the signed RLP payload.
+                            let raw = body["params"][0].as_str().unwrap_or_default().to_string();
+                            let hash = alloy_primitives::keccak256(
+                                hex::decode(raw.trim_start_matches("0x")).unwrap_or_default(),
+                            );
+                            txs.lock().unwrap().push(raw);
+                            serde_json::json!(format!("{hash:#x}"))
+                        }
+                        "eth_getTransactionReceipt" => serde_json::json!({
+                            "transactionHash": body["params"][0],
+                            "transactionIndex": "0x0",
+                            "blockHash": format!("0x{:064x}", 1),
+                            "blockNumber": "0x1",
+                            "from": "0x0000000000000000000000000000000000000001",
+                            "to": "0x0000000000000000000000000000000000000002",
+                            "cumulativeGasUsed": "0x5208",
+                            "gasUsed": "0x5208",
+                            "contractAddress": null,
+                            "logs": [],
+                            "logsBloom": format!("0x{:0512x}", 0),
+                            "status": "0x1",
+                            "effectiveGasPrice": "0x3b9aca00",
+                            "type": "0x2"
+                        }),
+                        _ => serde_json::Value::Null,
+                    };
+                    axum::Json(serde_json::json!({"jsonrpc": "2.0", "id": id, "result": result}))
+                }
+            }),
+        );
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
+        tokio::spawn(async move {
+            axum::serve(listener, app)
+                .with_graceful_shutdown(async move {
+                    let _ = shutdown_rx.wait_for(|&v| v).await;
+                })
+                .await
+                .ok();
+        });
+
+        Self {
+            url: format!("http://{addr}"),
+            sent_txs,
+            _shutdown: shutdown_tx,
+        }
+    }
+
+    /// Raw payloads of every sent transaction, in order. Alloy signs locally,
+    /// so these are signed RLP txs with the contract calldata embedded verbatim.
+    fn sent_txs(&self) -> Vec<String> {
+        self.sent_txs.lock().unwrap().clone()
+    }
+}
+
+fn selector(sig: &str) -> [u8; 4] {
+    let hash = alloy_primitives::keccak256(sig.as_bytes());
+    [hash[0], hash[1], hash[2], hash[3]]
+}
+
+fn selector_hex(sig: &str) -> String {
+    hex::encode(selector(sig))
+}
+
+/// The 32-byte ABI word of a u64, as it appears in calldata.
+fn abi_word(n: u64) -> String {
+    format!("{:064x}", n)
+}
+
+fn settle_billing_payload(operator: &str, amount: u64) -> SpendAuthPayload {
+    SpendAuthPayload {
+        commitment: format!("0x{:064x}", 1),
+        service_id: 1,
+        job_index: 0,
+        amount: amount.to_string(),
+        operator: operator.into(),
+        nonce: 7,
+        expiry: u64::MAX,
+        signature: format!("0x{}", "00".repeat(65)),
+    }
+}
+
+fn billing_client_for(rpc_url: &str) -> BillingClient {
+    BillingClient::new_with_params(
+        rpc_url.to_string(),
+        "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80".into(),
+        "0x0000000000000000000000000000000000000002"
+            .parse()
+            .unwrap(),
+        1,
+        0,
+    )
+    .unwrap()
+}
+
+/// actual < cap → the operator settles via `settlePayment` with the ACTUAL
+/// metered amount (62), not the pre-auth cap (1000). On-chain this pays the
+/// operator 62 and refunds 938 to the user's credit account (proven by
+/// BillingE2E.t.sol::test_meteredSettlement_partialRefund).
+#[tokio::test]
+async fn test_metered_settle_sends_settle_payment_with_actual_amount() {
+    let chain = MockChain::start().await;
+    let client = billing_client_for(&chain.url);
+    let operator = format!("{:#x}", client.operator_address());
+    let payload = settle_billing_payload(&operator, 1000);
+
+    settle_billing(&client, &payload, 1000, Some(62))
+        .await
+        .expect("metered settlement succeeds against mock chain");
+
+    let txs = chain.sent_txs();
+    assert_eq!(txs.len(), 1, "exactly one settlement tx");
+    let raw = &txs[0];
+    assert!(
+        raw.contains(&selector_hex("settlePayment(bytes32,address,uint256)")),
+        "metered settlement must call settlePayment, not claimPayment"
+    );
+    assert!(
+        !raw.contains(&selector_hex("claimPayment(bytes32,address)")),
+        "metered settlement must NOT call claimPayment"
+    );
+    assert!(
+        raw.contains(&abi_word(62)),
+        "settlePayment amount must be the actual metered cost (62), not the pre-auth cap"
+    );
+}
+
+/// actual == cap → `settlePayment` with the full amount, no refund on-chain.
+#[tokio::test]
+async fn test_metered_settle_at_cap_sends_full_amount() {
+    let chain = MockChain::start().await;
+    let client = billing_client_for(&chain.url);
+    let operator = format!("{:#x}", client.operator_address());
+    let payload = settle_billing_payload(&operator, 1000);
+
+    settle_billing(&client, &payload, 1000, Some(1000))
+        .await
+        .expect("settlement succeeds");
+
+    let txs = chain.sent_txs();
+    assert_eq!(txs.len(), 1);
+    let raw = &txs[0];
+    assert!(raw.contains(&selector_hex("settlePayment(bytes32,address,uint256)")));
+    assert!(
+        raw.contains(&abi_word(1000)),
+        "actual == cap: settlePayment charges the full pre-auth, no refund"
+    );
+}
+
+/// Metering unavailable (None) → falls back to `claimPayment`, the exact
+/// pre-metered-settlement behavior: full pre-auth, two-arg calldata.
+#[tokio::test]
+async fn test_unmetered_fallback_sends_claim_payment() {
+    let chain = MockChain::start().await;
+    let client = billing_client_for(&chain.url);
+    let operator = format!("{:#x}", client.operator_address());
+    let payload = settle_billing_payload(&operator, 1000);
+
+    settle_billing(&client, &payload, 1000, None)
+        .await
+        .expect("fallback settlement succeeds");
+
+    let txs = chain.sent_txs();
+    assert_eq!(txs.len(), 1);
+    let raw = &txs[0];
+    assert!(
+        raw.contains(&selector_hex("claimPayment(bytes32,address)")),
+        "metering-unavailable fallback must call claimPayment (behavior unchanged)"
+    );
+    assert!(
+        !raw.contains(&selector_hex("settlePayment(bytes32,address,uint256)")),
+        "fallback must NOT call settlePayment"
+    );
+}
+
 // ─── Wiremock Integration Tests ──────────────────────────────────────────
 
 #[tokio::test]

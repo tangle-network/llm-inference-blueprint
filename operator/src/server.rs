@@ -348,7 +348,8 @@ async fn handle_non_streaming(
     // Post-response settlement (spawned so the response returns immediately).
     // `authorized` (with its per-account guard) moves into the task, so the
     // account slot stays held through settlement and the rail is dispatched by
-    // the shared `settle_request` — shielded claims, direct no-ops.
+    // the shared `settle_request` — shielded settles the metered cost via
+    // `settlePayment` (refunding the unused pre-auth), direct no-ops.
     if let Some(auth) = authorized {
         let actual_cost = backend.calculate_cost(
             vllm_response.usage.prompt_tokens,
@@ -356,7 +357,7 @@ async fn handle_non_streaming(
         );
         let state = state.clone();
         let handle = tokio::spawn(async move {
-            settle_request(&state, &auth, actual_cost).await;
+            settle_request(&state, &auth, Some(actual_cost)).await;
         });
         backend.track_settlement(handle);
     }
@@ -492,7 +493,6 @@ async fn handle_streaming(
     // The JoinHandle is stored in `_settlement_handle` so that if the runtime
     // shuts down before completion, the task's drop is visible in logs via
     // the tracing guard inside the future.
-    let max_tokens_for_fallback = req.max_tokens;
     let settlement_handle = tokio::spawn(async move {
         // Guard that logs if this future is cancelled mid-flight (e.g. on shutdown).
         struct SettlementDropGuard(bool);
@@ -518,17 +518,21 @@ async fn handle_streaming(
 
                 if let Some(ref auth) = authorized_for_settlement {
                     let actual_cost = backend.calculate_cost(prompt_tokens, completion_tokens);
-                    settle_request(&state_for_settlement, auth, actual_cost).await;
+                    settle_request(&state_for_settlement, auth, Some(actual_cost)).await;
                 }
             }
             Err(_) => {
+                // Usage metering is unavailable (the backend ended the stream
+                // without a usage chunk): settle with `None` so the shared gate
+                // falls back to `claimPayment` of the full pre-auth — the
+                // original settlement behavior.
                 tracing::warn!(
-                    "streaming response ended without usage data — settling with max_tokens fallback"
+                    "streaming response ended without usage data — \
+                     metering unavailable, settling full pre-auth via claimPayment"
                 );
 
                 if let Some(ref auth) = authorized_for_settlement {
-                    let actual_cost = backend.calculate_cost(0, max_tokens_for_fallback);
-                    settle_request(&state_for_settlement, auth, actual_cost).await;
+                    settle_request(&state_for_settlement, auth, None).await;
                 }
             }
         }
