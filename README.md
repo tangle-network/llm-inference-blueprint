@@ -33,6 +33,18 @@ Single model per instance. Built with [Blueprint SDK](https://github.com/tangle-
 - [blueprint](https://github.com/tangle-network/blueprint) — Blueprint SDK
 - [tnt-core](https://github.com/tangle-network/tnt-core) — Tangle core protocol
 
+## Local qualification
+
+Merge `origin/main` before qualifying source changes. Run the affected integration surface before merge through the admitted launcher. The comprehensive reference below retains the former branch checks; workflow and documentation-only changes use YAML, content, link and diff checks.
+
+Provision Rust with rustfmt/clippy, protoc, Foundry and cargo-audit through the maintained host toolchain. The launcher does not provision these Rust/contract prerequisites.
+
+```bash
+beelink-gate --no-install auto https://github.com/tangle-network/llm-inference-blueprint.git <full-sha> -- bash -lc 'cargo fmt --all -- --check && cargo clippy --workspace -- -D warnings && cargo test --workspace && cargo audit --ignore RUSTSEC-2025-0055 && (cd contracts && forge soldeer update && forge build && forge test)'
+```
+
+The audit exclusion is for the Blueprint dependency's disabled EigenLayer feature. Payment, streaming and chain changes retain the actual-server and on-chain integration requirements in [CLAUDE.md](CLAUDE.md#verification). Missing artifacts or an early-returning harness provide no integration result; a substituted backend does not prove real model output. Automatic PR/push CI is retired. This local gate does not authorize a deployment, model request or payment.
+
 ## License
 
 MIT
