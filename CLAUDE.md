@@ -1,6 +1,6 @@
 # LLM Inference Blueprint
 
-Use [README.md](README.md) for setup, [operator/Cargo.toml](operator/Cargo.toml) for dependency ownership, and [.github/workflows/ci.yml](.github/workflows/ci.yml) for checks.
+Use [README.md](README.md) for setup, [operator/Cargo.toml](operator/Cargo.toml) for dependency ownership, and [README.md#local-qualification](README.md#local-qualification) for checks.
 Keep shared billing, payment validation, nonce handling, health, and metrics in the `tangle-inference-core` dependency.
 Read the selected dependency source for API contracts rather than copying versioned examples here.
 
