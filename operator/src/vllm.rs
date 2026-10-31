@@ -157,11 +157,21 @@ impl VllmProcess {
         )
     }
 
-    fn completions_url(&self) -> String {
-        format!(
-            "http://{}:{}/v1/chat/completions",
-            self.config.vllm.host, self.config.vllm.port
-        )
+    fn completions_url(&self, model: &str) -> String {
+        self.config.vllm.completions_url_for(model)
+    }
+
+    fn authorized(&self, model: &str, builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        let Some(provider) = self.config.vllm.provider_for(model) else {
+            return builder;
+        };
+        let Some(env_name) = provider.api_key_env.as_deref() else {
+            return builder;
+        };
+        match std::env::var(env_name) {
+            Ok(key) if !key.is_empty() => builder.bearer_auth(key),
+            _ => builder,
+        }
     }
 
     fn build_vllm_body(&self, req: &ChatCompletionRequest, stream: bool) -> serde_json::Value {
@@ -190,11 +200,11 @@ impl VllmProcess {
         &self,
         req: &ChatCompletionRequest,
     ) -> anyhow::Result<ChatCompletionResponse> {
+        let model = req.model.as_deref().unwrap_or(&self.config.vllm.model);
         let vllm_body = self.build_vllm_body(req, false);
 
         let resp = self
-            .client
-            .post(self.completions_url())
+            .authorized(model, self.client.post(self.completions_url(model)))
             .json(&vllm_body)
             .send()
             .await?
@@ -211,11 +221,11 @@ impl VllmProcess {
         &self,
         req: &ChatCompletionRequest,
     ) -> anyhow::Result<reqwest::Response> {
+        let model = req.model.as_deref().unwrap_or(&self.config.vllm.model);
         let vllm_body = self.build_vllm_body(req, true);
 
         let resp = self
-            .client
-            .post(self.completions_url())
+            .authorized(model, self.client.post(self.completions_url(model)))
             .json(&vllm_body)
             .send()
             .await?

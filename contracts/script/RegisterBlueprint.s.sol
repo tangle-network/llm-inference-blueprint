@@ -42,6 +42,11 @@ contract RegisterBlueprint is Script {
         address paymentToken = vm.envOr("PAYMENT_TOKEN", DEFAULT_PAYMENT_TOKEN);
 
         ITangle tangle = ITangle(tangleAddr);
+        // eventRate below is 0, which makes the job free. Tempo pathUSD uses DeployTempo.
+        require(
+            tangleAddr != 0xff137B9C879c47C28ce389e84501925438AB4cdA,
+            "Tempo: use contracts/script/DeployTempo.s.sol"
+        );
 
         vm.startBroadcast(deployerKey);
 
@@ -89,7 +94,7 @@ contract RegisterBlueprint is Script {
             maxOperators: 0, // unbounded
             subscriptionRate: 0,
             subscriptionInterval: 0,
-            eventRate: 0 // operators negotiate price per call via RFQ
+            eventRate: 0 // free on this path. Tempo floor is DeployTempo. Per-token prices stay in the operator.
         });
 
         def.metadata = Types.BlueprintMetadata({

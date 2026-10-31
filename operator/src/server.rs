@@ -8,6 +8,7 @@
 //! * Request/response types for the OpenAI chat/completions wire format.
 //! * HTTP handlers that glue the shared billing flow to the vLLM subprocess.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
 use blueprint_sdk::std::sync::Arc;
@@ -54,6 +55,32 @@ pub struct VllmBackend {
     pub cost_model: PerTokenCostModel,
     /// Handles of spawned settlement tasks, drained on shutdown.
     pub pending_settlements: Mutex<Vec<JoinHandle<()>>>,
+    usage: UsageLedger,
+}
+
+/// Totals behind `GET /v1/usage`. The per-response `usage` object is unchanged.
+struct UsageLedger {
+    requests: AtomicU64,
+    prompt_tokens: AtomicU64,
+    completion_tokens: AtomicU64,
+}
+
+impl UsageLedger {
+    const fn new() -> Self {
+        Self {
+            requests: AtomicU64::new(0),
+            prompt_tokens: AtomicU64::new(0),
+            completion_tokens: AtomicU64::new(0),
+        }
+    }
+
+    fn record(&self, prompt_tokens: u64, completion_tokens: u64) {
+        self.requests.fetch_add(1, Ordering::Relaxed);
+        self.prompt_tokens
+            .fetch_add(prompt_tokens, Ordering::Relaxed);
+        self.completion_tokens
+            .fetch_add(completion_tokens, Ordering::Relaxed);
+    }
 }
 
 impl VllmBackend {
@@ -67,7 +94,22 @@ impl VllmBackend {
             vllm,
             cost_model,
             pending_settlements: Mutex::new(Vec::new()),
+            usage: UsageLedger::new(),
         }
+    }
+
+    /// Count one finished chat, including a stream whose usage chunk arrived.
+    pub fn record_usage(&self, prompt_tokens: u32, completion_tokens: u32) {
+        self.usage
+            .record(u64::from(prompt_tokens), u64::from(completion_tokens));
+    }
+
+    pub fn usage_snapshot(&self) -> (u64, u64, u64) {
+        (
+            self.usage.requests.load(Ordering::Relaxed),
+            self.usage.prompt_tokens.load(Ordering::Relaxed),
+            self.usage.completion_tokens.load(Ordering::Relaxed),
+        )
     }
 
     /// Register a spawned settlement task for shutdown drain.
@@ -112,6 +154,7 @@ pub async fn start(
 
     let app = HttpRouter::new()
         .route("/v1/chat/completions", post(chat_completions))
+        .route("/v1/usage", get(usage_report))
         .route("/v1/models", get(list_models))
         .route("/v1/operator", get(operator_info))
         .route("/health", get(health_check))
@@ -344,6 +387,10 @@ async fn handle_non_streaming(
         vllm_response.usage.completion_tokens,
     );
     metrics_guard.set_success();
+    backend.record_usage(
+        vllm_response.usage.prompt_tokens,
+        vllm_response.usage.completion_tokens,
+    );
 
     // Post-response settlement (spawned so the response returns immediately).
     // `authorized` (with its per-account guard) moves into the task, so the
@@ -515,6 +562,7 @@ async fn handle_streaming(
             Ok((prompt_tokens, completion_tokens)) => {
                 metrics_guard.set_tokens(prompt_tokens, completion_tokens);
                 metrics_guard.set_success();
+                backend.record_usage(prompt_tokens, completion_tokens);
 
                 if let Some(ref auth) = authorized_for_settlement {
                     let actual_cost = backend.calculate_cost(prompt_tokens, completion_tokens);
@@ -561,15 +609,38 @@ async fn handle_streaming(
         })
 }
 
+async fn usage_report(State(state): State<AppState>) -> Json<serde_json::Value> {
+    let backend = backend_from(&state);
+    let (requests, prompt_tokens, completion_tokens) = backend.usage_snapshot();
+    Json(serde_json::json!({
+        "requests": requests,
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+    }))
+}
+
 async fn list_models(State(state): State<AppState>) -> Json<ModelList> {
     let backend = backend_from(&state);
+    let mut data = vec![ModelInfo {
+        id: backend.config.vllm.model.clone(),
+        object: "model".to_string(),
+        owned_by: "operator".to_string(),
+    }];
+    for provider in &backend.config.vllm.providers {
+        for model in &provider.models {
+            if data.iter().any(|info| info.id == *model) {
+                continue;
+            }
+            data.push(ModelInfo {
+                id: model.clone(),
+                object: "model".to_string(),
+                owned_by: provider.name.clone(),
+            });
+        }
+    }
     Json(ModelList {
         object: "list".to_string(),
-        data: vec![ModelInfo {
-            id: backend.config.vllm.model.clone(),
-            object: "model".to_string(),
-            owned_by: "operator".to_string(),
-        }],
+        data,
     })
 }
 
@@ -580,6 +651,7 @@ async fn operator_info(State(state): State<AppState>) -> Json<serde_json::Value>
     Json(serde_json::json!({
         "operator": format!("{:#x}", state.operator_address),
         "model": backend.config.vllm.model,
+        "providers": backend.config.vllm.providers.iter().map(|provider| &provider.name).collect::<Vec<_>>(),
         "pricing": {
             "price_per_input_token": backend.config.vllm.price_per_input_token,
             "price_per_output_token": backend.config.vllm.price_per_output_token,

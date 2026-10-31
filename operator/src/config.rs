@@ -85,6 +85,46 @@ pub struct VllmConfig {
     /// no GPU — used for local end-to-end testing.
     #[serde(default)]
     pub external: bool,
+
+    /// Providers that serve specific model ids. A request whose model is listed
+    /// is forwarded there. Any other model stays on `host:port`.
+    #[serde(default)]
+    pub providers: Vec<InferenceProvider>,
+}
+
+/// One OpenAI-compatible inference provider.
+///
+/// `base_url` is the origin plus optional `/v1`, with or without a trailing
+/// slash. The operator appends `/chat/completions`. The bearer token is read
+/// from `api_key_env` at request time and is not stored in this config.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InferenceProvider {
+    pub name: String,
+    pub base_url: String,
+    /// Model ids this provider serves. An empty list matches nothing.
+    #[serde(default)]
+    pub models: Vec<String>,
+    /// Env var that holds the bearer token. Unset sends no Authorization header.
+    #[serde(default)]
+    pub api_key_env: Option<String>,
+}
+
+impl VllmConfig {
+    pub fn provider_for(&self, model: &str) -> Option<&InferenceProvider> {
+        self.providers
+            .iter()
+            .find(|provider| provider.models.iter().any(|name| name == model))
+    }
+
+    /// Chat-completions URL for `model`. A listed provider wins. Otherwise the
+    /// local server at `host:port` (spawned vLLM, or `external = true`).
+    pub fn completions_url_for(&self, model: &str) -> String {
+        let base = match self.provider_for(model) {
+            Some(provider) => provider.base_url.trim_end_matches('/').to_string(),
+            None => format!("http://{}:{}/v1", self.host, self.port),
+        };
+        format!("{base}/chat/completions")
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
