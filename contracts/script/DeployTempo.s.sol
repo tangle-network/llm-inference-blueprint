@@ -1,15 +1,12 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
-
 import { Script, console2 } from "forge-std/Script.sol";
 import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import { Types } from "tnt-core/libraries/Types.sol";
 import { InferenceBSM } from "../src/InferenceBSM.sol";
-
 interface IERC20Decimals {
     function decimals() external view returns (uint8);
 }
-
 interface ITangle {
     function createBlueprint(Types.BlueprintDefinition calldata def) external returns (uint64);
     function setBlueprintSettlementAsset(uint64 blueprintId, address asset) external;
@@ -17,44 +14,11 @@ interface ITangle {
     function getBlueprintSettlementAsset(uint64 blueprintId) external view returns (address);
     function getJobEventRate(uint64 blueprintId, uint8 jobIndex) external view returns (uint256);
 }
-
-/// @title DeployTempo
-/// @notice Registers the LLM inference blueprint on Tempo Moderato.
-///
-/// Tempo Moderato (chain id 42431) is not mainnet.
-///   tangle   0xff137B9C879c47C28ce389e84501925438AB4cdA
-///   pathUSD  0x20C0000000000000000000000000000000000000 (6 decimals)
-///   RPC      https://rpc.moderato.tempo.xyz
-///
-/// Blueprint 10 cannot be repaired in place. Its manager was initialized with a
-/// different payment token, and `queryIsPaymentAssetAllowed` only accepts that
-/// token. This deploys a new UUPS manager initialized with pathUSD, then pins it.
-///
-/// The on-chain job price is a flat floor, default 0.001 pathUSD (1000 units).
-/// `eventRate` 0 would make the job free. `1e15` would make it $1,000,000,000.
-/// Per-token prices stay on the operator (`price_per_input_token`,
-/// `price_per_output_token`) and on each `providers[]` route. `GET /v1/usage`
-/// reports requests and tokens. A listed model is sent to that provider's
-/// OpenAI-compatible `/chat/completions`. Any other model stays on local vLLM
-/// or on `external = true`.
-///
-/// The diamond is not changed. Metering the exact token bill inside `submitJob`
-/// would be a protocol change (the chain charges a flat rate before the result
-/// exists). The operator already meters the token bill on the HTTP path. An
-/// on-chain oracle was rejected: the owner can move the floor with
-/// `setJobEventRates` without a new diamond.
-///
-/// Mainnet needs its own deployment: admin timelock separate from the treasury
-/// multisig, nonzero exit delays, and this floor pinned before the first service.
-///
-///   PRIVATE_KEY=<deployer> \
-///   forge script script/DeployTempo.s.sol:DeployTempo \
-///     --rpc-url https://rpc.moderato.tempo.xyz --broadcast --slow \
-///     --gas-estimate-multiplier 110
+/// @notice Registers a new UUPS LLM manager on Tempo Moderato and pins a flat
+///         floor (default 0.001 token). Blueprint 10 cannot take pathUSD.
 contract DeployTempo is Script {
     address constant TANGLE = 0xff137B9C879c47C28ce389e84501925438AB4cdA;
     address constant PATH_USD = 0x20C0000000000000000000000000000000000000;
-
     function run() external {
         uint256 deployerKey = vm.envUint("PRIVATE_KEY");
         address tangleAddr = vm.envOr("TANGLE_CORE", TANGLE);
@@ -62,9 +26,7 @@ contract DeployTempo is Script {
         uint8 decimals = IERC20Decimals(paymentToken).decimals();
         uint256 floor = vm.envOr("EVENT_RATE", _defaultFloor(decimals));
         require(floor > 0 && floor <= _maxFloor(decimals), "EVENT_RATE out of range for settlement decimals");
-
         ITangle tangle = ITangle(tangleAddr);
-
         vm.startBroadcast(deployerKey);
         InferenceBSM impl = new InferenceBSM();
         ERC1967Proxy proxy = new ERC1967Proxy(address(impl), abi.encodeCall(InferenceBSM.initialize, (paymentToken)));
@@ -77,7 +39,6 @@ contract DeployTempo is Script {
         rates[0] = floor;
         tangle.setJobEventRates(blueprintId, jobs, rates);
         vm.stopBroadcast();
-
         require(tangle.getBlueprintSettlementAsset(blueprintId) == paymentToken, "settlement asset was not pinned");
         require(tangle.getJobEventRate(blueprintId, 0) == floor, "inference floor was not written");
         console2.log("DEPLOY_INFERENCE_BSM_IMPL=%s", vm.toString(address(impl)));
@@ -85,18 +46,15 @@ contract DeployTempo is Script {
         console2.log("DEPLOY_INFERENCE_BLUEPRINT_ID=%s", vm.toString(blueprintId));
         console2.log("floor (token units):", floor);
     }
-
     function _defaultFloor(uint8 decimals) internal pure returns (uint256) {
         if (decimals > 18) return 0;
         uint256 floor = (10 ** uint256(decimals)) / 1000;
         return floor == 0 ? 1 : floor;
     }
-
     function _maxFloor(uint8 decimals) internal pure returns (uint256) {
         if (decimals > 18) return 0;
         return 1_000_000 * (10 ** uint256(decimals));
     }
-
     function _definition(address manager, uint256 floor) internal pure returns (Types.BlueprintDefinition memory def) {
         def.metadataUri = "tangle:llm-inference";
         def.metadataHash = keccak256(bytes(def.metadataUri));
@@ -125,11 +83,7 @@ contract DeployTempo is Script {
         });
         def.jobs = new Types.JobDefinition[](1);
         def.jobs[0] = Types.JobDefinition({
-            name: "inference",
-            description: "",
-            metadataUri: "",
-            paramsSchema: "",
-            resultSchema: ""
+            name: "inference", description: "", metadataUri: "", paramsSchema: "", resultSchema: ""
         });
         def.registrationSchema = "";
         def.requestSchema = "";
