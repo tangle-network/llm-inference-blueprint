@@ -7,12 +7,8 @@
 //! * `VllmBackend` — the backend attached to `AppState` via `AppStateBuilder`.
 //! * Request/response types for the OpenAI chat/completions wire format.
 //! * HTTP handlers that glue the shared billing flow to the vLLM subprocess.
-
-use std::sync::Mutex;
-
-use blueprint_sdk::std::sync::Arc;
-use blueprint_sdk::std::time::Duration;
-
+use crate::config::OperatorConfig;
+use crate::vllm::VllmProcess;
 use axum::{
     body::Body,
     extract::{DefaultBodyLimit, State},
@@ -21,14 +17,12 @@ use axum::{
     routing::{get, post},
     Json, Router as HttpRouter,
 };
+use blueprint_sdk::std::sync::Arc;
+use blueprint_sdk::std::time::Duration;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
-use tokio::sync::OwnedSemaphorePermit;
-use tokio::task::JoinHandle;
-use tower_http::cors::CorsLayer;
-use tower_http::timeout::TimeoutLayer;
-use tower_http::trace::TraceLayer;
-
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
 use tangle_inference_core::payment::PaymentProof;
 use tangle_inference_core::server::{
     authorize_request, error_response, payment_required, resolve_payment_proof, settle_request,
@@ -38,10 +32,11 @@ use tangle_inference_core::{
     detect_gpus, AppState, CostModel, CostParams, GpuInfo, PerTokenCostModel, RequestGuard,
     SpendAuthPayload,
 };
-
-use crate::config::OperatorConfig;
-use crate::vllm::VllmProcess;
-
+use tokio::sync::OwnedSemaphorePermit;
+use tokio::task::JoinHandle;
+use tower_http::cors::CorsLayer;
+use tower_http::timeout::TimeoutLayer;
+use tower_http::trace::TraceLayer;
 /// Backend attached to `AppState` via `AppStateBuilder::backend`. Handlers
 /// retrieve it via `state.backend::<VllmBackend>().unwrap()`.
 ///
@@ -54,8 +49,30 @@ pub struct VllmBackend {
     pub cost_model: PerTokenCostModel,
     /// Handles of spawned settlement tasks, drained on shutdown.
     pub pending_settlements: Mutex<Vec<JoinHandle<()>>>,
+    usage: UsageLedger,
 }
-
+/// Totals behind `GET /v1/usage`. The per-response `usage` object is unchanged.
+struct UsageLedger {
+    requests: AtomicU64,
+    prompt_tokens: AtomicU64,
+    completion_tokens: AtomicU64,
+}
+impl UsageLedger {
+    const fn new() -> Self {
+        Self {
+            requests: AtomicU64::new(0),
+            prompt_tokens: AtomicU64::new(0),
+            completion_tokens: AtomicU64::new(0),
+        }
+    }
+    fn record(&self, prompt_tokens: u64, completion_tokens: u64) {
+        self.requests.fetch_add(1, Ordering::Relaxed);
+        self.prompt_tokens
+            .fetch_add(prompt_tokens, Ordering::Relaxed);
+        self.completion_tokens
+            .fetch_add(completion_tokens, Ordering::Relaxed);
+    }
+}
 impl VllmBackend {
     pub fn new(config: Arc<OperatorConfig>, vllm: Arc<VllmProcess>) -> Self {
         let cost_model = PerTokenCostModel {
@@ -67,9 +84,21 @@ impl VllmBackend {
             vllm,
             cost_model,
             pending_settlements: Mutex::new(Vec::new()),
+            usage: UsageLedger::new(),
         }
     }
-
+    /// Count one finished chat, including a stream whose usage chunk arrived.
+    pub fn record_usage(&self, prompt_tokens: u32, completion_tokens: u32) {
+        self.usage
+            .record(u64::from(prompt_tokens), u64::from(completion_tokens));
+    }
+    pub fn usage_snapshot(&self) -> (u64, u64, u64) {
+        (
+            self.usage.requests.load(Ordering::Relaxed),
+            self.usage.prompt_tokens.load(Ordering::Relaxed),
+            self.usage.completion_tokens.load(Ordering::Relaxed),
+        )
+    }
     /// Register a spawned settlement task for shutdown drain.
     pub fn track_settlement(&self, handle: JoinHandle<()>) {
         if let Ok(mut handles) = self.pending_settlements.lock() {
@@ -78,7 +107,6 @@ impl VllmBackend {
             handles.push(handle);
         }
     }
-
     /// Drain all pending settlement handles, returning them for awaiting.
     pub fn drain_settlements(&self) -> Vec<JoinHandle<()>> {
         self.pending_settlements
@@ -86,7 +114,6 @@ impl VllmBackend {
             .map(|mut h| h.drain(..).collect())
             .unwrap_or_default()
     }
-
     /// Calculate the cost for a request given token counts.
     pub fn calculate_cost(&self, prompt_tokens: u32, completion_tokens: u32) -> u64 {
         self.cost_model.calculate_cost(&CostParams {
@@ -96,7 +123,6 @@ impl VllmBackend {
         })
     }
 }
-
 /// Start the HTTP server with graceful shutdown support, returns a join handle.
 pub async fn start(
     state: AppState,
@@ -109,9 +135,9 @@ pub async fn start(
     let stream_timeout_secs = state.server_config.stream_timeout_secs;
     let bind = format!("{}:{}", state.server_config.host, state.server_config.port);
     let _ = backend; // ensure we validated before spawning
-
     let app = HttpRouter::new()
         .route("/v1/chat/completions", post(chat_completions))
+        .route("/v1/usage", get(usage_report))
         .route("/v1/models", get(list_models))
         .route("/v1/operator", get(operator_info))
         .route("/health", get(health_check))
@@ -122,13 +148,10 @@ pub async fn start(
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
         .with_state(state.clone());
-
     let listener = tokio::net::TcpListener::bind(&bind).await?;
     tracing::info!(bind = %bind, "HTTP server listening");
-
     // Clone state so we can drain pending settlements after the server stops.
     let state_for_drain = state;
-
     let handle = tokio::spawn(async move {
         let shutdown_signal = async move {
             let _ = shutdown_rx.wait_for(|&v| v).await;
@@ -140,7 +163,6 @@ pub async fn start(
         {
             tracing::error!(error = %e, "HTTP server error");
         }
-
         // Drain pending settlement tasks before exiting.
         if let Some(backend) = state_for_drain.backend::<VllmBackend>() {
             let handles = backend.drain_settlements();
@@ -157,12 +179,9 @@ pub async fn start(
             }
         }
     });
-
     Ok(handle)
 }
-
 // --- Request / Response types (OpenAI-compatible) ---
-
 #[derive(Debug, Deserialize)]
 pub struct ChatCompletionRequest {
     pub model: Option<String>,
@@ -181,11 +200,9 @@ pub struct ChatCompletionRequest {
     pub presence_penalty: Option<f32>,
     #[serde(default)]
     pub stop: Option<Vec<String>>,
-
     /// ShieldedCredits spend authorization (required when billing_required is true).
     /// Can also be provided via x402 headers (X-Payment-Signature).
     pub spend_auth: Option<SpendAuthPayload>,
-
     /// Plain-crypto payment proof (the Direct rail): a `DirectTransfer` carrying
     /// the tx hash of an ERC-20 transfer to the operator. An alternative to
     /// `spend_auth` — pay-per-call in USDC with no shielded pool. Authorized
@@ -194,13 +211,11 @@ pub struct ChatCompletionRequest {
     #[serde(default)]
     pub payment: Option<PaymentProof>,
 }
-
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ChatMessage {
     pub role: String,
     pub content: String,
 }
-
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ChatCompletionResponse {
     pub id: String,
@@ -210,49 +225,41 @@ pub struct ChatCompletionResponse {
     pub choices: Vec<Choice>,
     pub usage: Usage,
 }
-
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Choice {
     pub index: u32,
     pub message: ChatMessage,
     pub finish_reason: String,
 }
-
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Usage {
     pub prompt_tokens: u32,
     pub completion_tokens: u32,
     pub total_tokens: u32,
 }
-
 #[derive(Debug, Serialize)]
 struct ModelInfo {
     id: String,
     object: String,
     owned_by: String,
 }
-
 #[derive(Debug, Serialize)]
 struct ModelList {
     object: String,
     data: Vec<ModelInfo>,
 }
-
 fn default_max_tokens() -> u32 {
     512
 }
 fn default_temperature() -> f32 {
     0.7
 }
-
 // --- Handlers ---
-
 fn backend_from(state: &AppState) -> &VllmBackend {
     state
         .backend::<VllmBackend>()
         .expect("AppState backend is VllmBackend (checked in server::start)")
 }
-
 async fn chat_completions(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -261,7 +268,6 @@ async fn chat_completions(
     let backend = backend_from(&state);
     let model_name = req.model.as_deref().unwrap_or(&backend.config.vllm.model);
     let metrics_guard = RequestGuard::new(model_name);
-
     // 1. Acquire semaphore permit
     let permit: OwnedSemaphorePermit = match state.semaphore.clone().try_acquire_owned() {
         Ok(p) => p,
@@ -274,13 +280,11 @@ async fn chat_completions(
             );
         }
     };
-
     // Resolve the payment proof (body payment | spend_auth | x402 header), then
     // gate -> authorize -> (after serving) settle through the shared, rail-
     // agnostic billing flow. Shielded and direct differ only inside those core
     // functions; this handler is identical for both.
     let proof = resolve_payment_proof(&headers, req.spend_auth.take(), req.payment.take());
-
     if state.billing_config.billing_required && proof.is_none() {
         let estimated = backend.calculate_cost(1000, 512);
         return payment_required(
@@ -290,7 +294,6 @@ async fn chat_completions(
             estimated,
         );
     }
-
     let authorized: Option<AuthorizedPayment> = if let Some(proof) = proof {
         // Estimated max cost feeds the shielded pre-auth ceiling. authorize_request
         // validates first, then checks backend health, then commits — so a bad
@@ -309,7 +312,6 @@ async fn chat_completions(
     } else {
         None
     };
-
     // Dispatch to streaming or non-streaming path.
     if req.stream {
         handle_streaming(state, req, authorized, metrics_guard, permit).await
@@ -317,7 +319,6 @@ async fn chat_completions(
         handle_non_streaming(state, req, authorized, metrics_guard, permit).await
     }
 }
-
 async fn handle_non_streaming(
     state: AppState,
     req: ChatCompletionRequest,
@@ -338,13 +339,15 @@ async fn handle_non_streaming(
             );
         }
     };
-
     metrics_guard.set_tokens(
         vllm_response.usage.prompt_tokens,
         vllm_response.usage.completion_tokens,
     );
     metrics_guard.set_success();
-
+    backend.record_usage(
+        vllm_response.usage.prompt_tokens,
+        vllm_response.usage.completion_tokens,
+    );
     // Post-response settlement (spawned so the response returns immediately).
     // `authorized` (with its per-account guard) moves into the task, so the
     // account slot stays held through settlement and the rail is dispatched by
@@ -361,10 +364,8 @@ async fn handle_non_streaming(
         });
         backend.track_settlement(handle);
     }
-
     Json(vllm_response).into_response()
 }
-
 async fn handle_streaming(
     state: AppState,
     req: ChatCompletionRequest,
@@ -386,19 +387,14 @@ async fn handle_streaming(
             );
         }
     };
-
     let byte_stream = upstream.bytes_stream();
-
     // The authorization (with its per-account guard) moves into the settlement
     // task, so the account slot is held across the whole stream + settlement.
     let authorized_for_settlement = authorized;
     let state_for_settlement = state.clone();
-
     let (usage_tx, usage_rx) = tokio::sync::oneshot::channel::<(u32, u32)>();
-
     let idle_timeout = Duration::from_secs(state.server_config.idle_chunk_timeout_secs);
     let max_line_buf = state.server_config.max_line_buf_bytes;
-
     // Wrap the byte stream with a per-chunk idle timeout
     let timed_stream = tokio_stream::StreamExt::timeout(
         tokio_stream::wrappers::ReceiverStream::new({
@@ -415,17 +411,14 @@ async fn handle_streaming(
         }),
         idle_timeout,
     );
-
     let proxied_stream = {
         let mut usage_sender = Some(usage_tx);
         let mut line_buf = String::new();
-
         timed_stream.map(move |item| {
             match item {
                 Ok(Ok(bytes)) => {
                     if let Ok(text) = std::str::from_utf8(&bytes) {
                         line_buf.push_str(text);
-
                         // Cap line_buf to prevent unbounded memory growth
                         if line_buf.len() > max_line_buf {
                             tracing::warn!(
@@ -435,7 +428,6 @@ async fn handle_streaming(
                             );
                             line_buf.clear();
                         }
-
                         // Only process complete lines (terminated by \n).
                         while let Some(newline_pos) = line_buf.find('\n') {
                             {
@@ -484,9 +476,7 @@ async fn handle_streaming(
             }
         })
     };
-
     let body = Body::from_stream(proxied_stream);
-
     // Background task: waits for the stream to complete, settles billing,
     // records metrics, releases the semaphore permit on drop.
     //
@@ -507,7 +497,6 @@ async fn handle_streaming(
             }
         }
         let mut drop_guard = SettlementDropGuard(false);
-
         let backend = state_for_settlement
             .backend::<VllmBackend>()
             .expect("backend");
@@ -515,7 +504,7 @@ async fn handle_streaming(
             Ok((prompt_tokens, completion_tokens)) => {
                 metrics_guard.set_tokens(prompt_tokens, completion_tokens);
                 metrics_guard.set_success();
-
+                backend.record_usage(prompt_tokens, completion_tokens);
                 if let Some(ref auth) = authorized_for_settlement {
                     let actual_cost = backend.calculate_cost(prompt_tokens, completion_tokens);
                     settle_request(&state_for_settlement, auth, Some(actual_cost)).await;
@@ -530,21 +519,17 @@ async fn handle_streaming(
                     "streaming response ended without usage data — \
                      metering unavailable, settling full pre-auth via claimPayment"
                 );
-
                 if let Some(ref auth) = authorized_for_settlement {
                     settle_request(&state_for_settlement, auth, None).await;
                 }
             }
         }
-
         // Disarm the drop guard — settlement completed successfully.
         drop_guard.0 = true;
         drop(permit);
     });
-
     // Track for graceful shutdown drain.
     backend.track_settlement(settlement_handle);
-
     Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "text/event-stream")
@@ -560,19 +545,39 @@ async fn handle_streaming(
             )
         })
 }
-
+async fn usage_report(State(state): State<AppState>) -> Json<serde_json::Value> {
+    let backend = backend_from(&state);
+    let (requests, prompt_tokens, completion_tokens) = backend.usage_snapshot();
+    Json(serde_json::json!({
+        "requests": requests,
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+    }))
+}
 async fn list_models(State(state): State<AppState>) -> Json<ModelList> {
     let backend = backend_from(&state);
+    let mut data = vec![ModelInfo {
+        id: backend.config.vllm.model.clone(),
+        object: "model".to_string(),
+        owned_by: "operator".to_string(),
+    }];
+    for provider in &backend.config.vllm.providers {
+        for model in &provider.models {
+            if data.iter().any(|info| info.id == *model) {
+                continue;
+            }
+            data.push(ModelInfo {
+                id: model.clone(),
+                object: "model".to_string(),
+                owned_by: provider.name.clone(),
+            });
+        }
+    }
     Json(ModelList {
         object: "list".to_string(),
-        data: vec![ModelInfo {
-            id: backend.config.vllm.model.clone(),
-            object: "model".to_string(),
-            owned_by: "operator".to_string(),
-        }],
+        data,
     })
 }
-
 /// Operator info endpoint for discovery. Returns model, pricing, GPU caps, endpoint.
 async fn operator_info(State(state): State<AppState>) -> Json<serde_json::Value> {
     let backend = backend_from(&state);
@@ -580,6 +585,7 @@ async fn operator_info(State(state): State<AppState>) -> Json<serde_json::Value>
     Json(serde_json::json!({
         "operator": format!("{:#x}", state.operator_address),
         "model": backend.config.vllm.model,
+        "providers": backend.config.vllm.providers.iter().map(|provider| &provider.name).collect::<Vec<_>>(),
         "pricing": {
             "price_per_input_token": backend.config.vllm.price_per_input_token,
             "price_per_output_token": backend.config.vllm.price_per_output_token,
@@ -603,13 +609,11 @@ async fn operator_info(State(state): State<AppState>) -> Json<serde_json::Value>
         "chain_id": state.tangle_config.chain_id,
     }))
 }
-
 async fn health_check(
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let backend = backend_from(&state);
     let vllm_healthy = backend.vllm.is_healthy().await;
-
     if vllm_healthy {
         Ok(Json(serde_json::json!({
             "status": "ok",
@@ -619,14 +623,12 @@ async fn health_check(
         Err(StatusCode::SERVICE_UNAVAILABLE)
     }
 }
-
 async fn gpu_health() -> Result<Json<Vec<GpuInfo>>, (StatusCode, String)> {
     match detect_gpus().await {
         Ok(gpus) => Ok(Json(gpus)),
         Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
     }
 }
-
 async fn metrics_handler() -> Response {
     let body = tangle_inference_core::metrics::gather();
     Response::builder()

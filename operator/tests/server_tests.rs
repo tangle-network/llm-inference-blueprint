@@ -8,7 +8,8 @@ use wiremock::{
 };
 
 use llm_inference::config::{
-    BillingConfig, GpuConfig, OperatorConfig, ServerConfig, TangleConfig, VllmConfig,
+    BillingConfig, GpuConfig, InferenceProvider, OperatorConfig, ServerConfig, TangleConfig,
+    VllmConfig,
 };
 use llm_inference::server::VllmBackend;
 use llm_inference::{AppStateBuilder, BillingClient, NonceStore};
@@ -38,6 +39,7 @@ fn test_config(vllm_port: u16) -> OperatorConfig {
             download_dir: None,
             startup_timeout_secs: 10,
             external: false,
+            providers: vec![],
         },
         server: ServerConfig {
             host: "0.0.0.0".into(),
@@ -581,6 +583,96 @@ async fn test_non_streaming_through_handler() {
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["choices"][0]["message"]["content"], "Hello!");
     assert_eq!(body["usage"]["prompt_tokens"], 5);
+
+    let usage: serde_json::Value = client
+        .get(format!("http://127.0.0.1:{server_port}/v1/usage"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(usage["requests"], 1);
+    assert_eq!(usage["prompt_tokens"], 5);
+    assert_eq!(usage["completion_tokens"], 1);
+}
+
+#[tokio::test]
+async fn test_provider_routes_listed_model() {
+    let mock_provider = MockServer::start().await;
+    let response_body = serde_json::json!({
+        "id": "chatcmpl-remote",
+        "object": "chat.completion",
+        "created": 1700000000u64,
+        "model": "remote-model",
+        "choices": [{
+            "index": 0,
+            "message": {"role": "assistant", "content": "from-provider"},
+            "finish_reason": "stop"
+        }],
+        "usage": {"prompt_tokens": 2, "completion_tokens": 3, "total_tokens": 5}
+    });
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&response_body))
+        .mount(&mock_provider)
+        .await;
+
+    let server_port = free_port();
+    let mut config = test_config(1);
+    config.server.port = server_port;
+    config.server.host = "127.0.0.1".into();
+    config.vllm.providers = vec![InferenceProvider {
+        name: "modal".into(),
+        base_url: format!("http://{}/v1", mock_provider.address()),
+        models: vec!["remote-model".into()],
+        api_key_env: None,
+    }];
+    let config = Arc::new(config);
+    let state = build_test_state(config).await;
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let handle = llm_inference::server::start(state, shutdown_rx)
+        .await
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!(
+            "http://127.0.0.1:{server_port}/v1/chat/completions"
+        ))
+        .json(&serde_json::json!({
+            "model": "remote-model",
+            "messages": [{"role": "user", "content": "Hi"}],
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["choices"][0]["message"]["content"], "from-provider");
+
+    let models: serde_json::Value = client
+        .get(format!("http://127.0.0.1:{server_port}/v1/models"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let ids: Vec<&str> = models["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|model| model["id"].as_str())
+        .collect();
+    assert!(
+        ids.contains(&"remote-model"),
+        "listed provider model missing: {ids:?}"
+    );
+
+    let _ = shutdown_tx.send(true);
+    let _ = handle.await;
 }
 
 #[tokio::test]
