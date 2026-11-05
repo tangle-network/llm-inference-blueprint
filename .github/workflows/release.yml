@@ -1,85 +1,48 @@
-# Reusable release workflow for Tangle blueprint operators.
-# Copy this to .github/workflows/release.yml in each blueprint repo and set
-# the `BINARY_NAME` repo variable (or edit the default below).
-#
-# Builds the operator for x86_64-unknown-linux-gnu — the target operators
-# actually run on — NATIVELY on ubuntu (no cross-compilation). Cross builds
-# (musl/arm64/macos) repeatedly broke on aws-lc-sys' GCC memcmp bug inside the
-# `cross` containers; a native gnu build is reliable and is what servers use.
-#
-# Uploads the stripped binary + sha256 as GitHub Release assets (free hosting).
-# The on-chain version is then registered from tnt-core's
-# `publish-blueprint-binary` workflow.
-#
-# Usage: git tag v0.1.0 && git push origin v0.1.0   (or run via workflow_dispatch)
 name: Release
-
 on:
   push:
     tags: ['v*']
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Existing tag to (re)build a release for (e.g. v0.1.0)'
+        description: Existing tag to release
         required: true
-
 permissions:
   contents: write
-
 env:
   CARGO_TERM_COLOR: always
-  BINARY_NAME: ${{ vars.BINARY_NAME || 'llm-operator' }}
   TARGET: x86_64-unknown-linux-gnu
-
 jobs:
   release:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
-
+          ref: ${{ inputs.tag || github.ref }}
       - name: System dependencies
-        # protobuf-compiler from apt (ubuntu-latest ships 3.21.x) — avoids the
-        # GitHub-API-backed setup-protoc action. This is the protoc version the
-        # operator builds against locally.
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler libssl-dev pkg-config
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo build
-        uses: Swatinem/rust-cache@v2
-
-      - name: Build release binary
-        run: cargo build --release --bin "$BINARY_NAME"
-
-      - name: Package archive + checksum
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler libssl-dev pkg-config clang
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.93'
+      - uses: Swatinem/rust-cache@v2
+      - name: Build operators
+        run: cargo build --locked --release -p llm-inference --bins
+      - name: Package operators
         run: |
-          BIN="target/release/${BINARY_NAME}"
-          test -f "$BIN" || { echo "::error::binary not found: $BIN"; exit 1; }
-          strip "$BIN" 2>/dev/null || true
-          ARCHIVE="${BINARY_NAME}-${TARGET}.tar.xz"
-          tar -cJf "$ARCHIVE" -C target/release "$BINARY_NAME"
-          sha256sum "$ARCHIVE" > "${ARCHIVE}.sha256"
-          echo "ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
-          echo "Built $(du -h "$ARCHIVE" | cut -f1) archive"
-          cat "${ARCHIVE}.sha256"
-
+          for binary in llm-operator operator-lite; do
+            strip "target/release/$binary"
+            archive="$binary-$TARGET.tar.xz"
+            tar -cJf "$archive" -C target/release "$binary"
+            sha256sum "$archive" > "$archive.sha256"
+            (cd target/release && sha256sum "$binary") > "$binary.sha256"
+            cut -d' ' -f1 "$binary.sha256" > "$binary-$TARGET.bin.sha256"
+          done
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag || github.ref_name }}
         run: |
-          TAG="${{ github.event.inputs.tag || github.ref_name }}"
-          NOTES="### Operator binary
-
-          | Target | Archive |
-          |--------|---------|
-          | \`${TARGET}\` | \`${ARCHIVE}\` |
-
-          Verify: \`sha256sum -c ${ARCHIVE}.sha256\`
-          Register on-chain via tnt-core \`publish-blueprint-binary\` (tag \`${TAG}\`)."
-          # create the release if missing, then upload assets (idempotent re-runs).
-          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
-            || gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "$TAG" --notes "$NOTES"
-          gh release upload "$TAG" "$ARCHIVE" "${ARCHIVE}.sha256" --repo "$GITHUB_REPOSITORY" --clobber
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 ||
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "$TAG" --generate-notes
+          gh release upload "$TAG" ./*.tar.xz ./*.sha256 --repo "$GITHUB_REPOSITORY" --clobber

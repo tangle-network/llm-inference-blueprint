@@ -45,7 +45,8 @@ async fn main() -> Result<(), blueprint_sdk::Error> {
     setup_log();
 
     // Load operator config
-    let config = OperatorConfig::load(None)
+    let config_path = std::env::var("VLLM_OP_CONFIG").ok();
+    let config = OperatorConfig::load(config_path.as_deref())
         .map_err(|e| blueprint_sdk::Error::Other(format!("config load failed: {e}")))?;
     let config = Arc::new(config);
 

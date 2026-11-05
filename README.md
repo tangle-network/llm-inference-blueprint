@@ -17,7 +17,7 @@ A Tangle Blueprint enabling operators to serve LLM inference via [vLLM](https://
 - **On-chain jobs** via TangleProducer — verifiable results on Tangle
 - **x402 HTTP** — fast private inference at `/v1/chat/completions`
 
-Single model per instance. Built with [Blueprint SDK](https://github.com/tangle-network/blueprint) `0.1.0-alpha.22`.
+Single model per instance. Dependency versions are owned by [operator/Cargo.toml](operator/Cargo.toml).
 
 ## Components
 
@@ -44,6 +44,46 @@ beelink-gate auto https://github.com/tangle-network/llm-inference-blueprint.git 
 ```
 
 The audit exclusion is for the Blueprint dependency's disabled EigenLayer feature. Payment, streaming and chain changes retain the actual-server and on-chain integration requirements in [CLAUDE.md](CLAUDE.md#verification). Missing artifacts or an early-returning harness provide no integration result; a substituted backend does not prove real model output. Automatic PR/push CI is retired. This local gate does not authorize a deployment, model request or payment.
+
+## Run an operator
+
+`operator/Dockerfile` builds both binaries in `operator/Cargo.toml` and uses the
+[vLLM CUDA image](https://docs.vllm.ai/en/v0.32.0/deployment/docker/).
+Run `docker compose up --build operator` with the NVIDIA container runtime and
+edit `deploy/config.example.json` for your chain, model and payment settings.
+`llm-operator` manages the engine; `operator-lite` connects to an existing
+OpenAI-compatible backend such as the GTR Ollama shim.
+
+Tagged releases publish both Linux binaries, archive checksums and extracted
+binary checksums through [Release](.github/workflows/release.yml).
+To install the GTR user service, download a chosen release, verify its archive
+with `sha256sum -c operator-lite-x86_64-unknown-linux-gnu.tar.xz.sha256`, extract
+it, then verify `sha256sum -c operator-lite.sha256`.
+Install the verified binary under `/opt/tangle-operator/releases/<tag>/` and
+atomically point `/opt/tangle-operator/current` at that directory. Retain the
+previous release for recovery. Install private config at
+`/etc/tangle-operator/config.json` (mode 0600), with its nonce store under
+`/var/lib/tangle-operator/`; the service user must own config and state.
+Install [gtr-operator.service](deploy/systemd/gtr-operator.service) at
+`/etc/systemd/user/gtr-operator.service`. Preserve any existing user unit outside
+the systemd search path before replacing it. With `ollama-shim.service` running,
+wait for `/metrics` active requests to reach zero, then run
+`systemctl --user daemon-reload && systemctl --user enable --now gtr-operator`.
+For an upgrade, restart the service. Verify `/proc/<MainPID>/exe` against the
+release binary checksum, `/health`, `/v1/models` and a real routed completion.
+On failure, switch `current` to the retained release and restart, then repeat
+these checks. Never reset the nonce store during an upgrade or recovery.
+
+## Live testnet registration
+
+On Tempo Moderato, the serving registration is blueprint **10**, with
+InferenceBSM `0x23254045aa898e4b59366a7126047dde80b5d094` and operator
+`0xA78D390392ff07b218E9b3b2Ee1340F9C08499c1`. Its public ingress is
+`https://drew-gtr-pro.taild10bfc.ts.net`. Read its model and rates from the
+running operator and Router APIs. Blueprint **18** is a separate pathUSD
+registration; deployment of its manager did not migrate the serving operator.
+The [Router billing lane](https://github.com/tangle-network/tangle-router/pull/926)
+owns Router price units; coordinate any native-payment price migration with it.
 
 ## License
 

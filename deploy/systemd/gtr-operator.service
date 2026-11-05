@@ -1,0 +1,17 @@
+[Unit]
+Description=Tangle inference operator
+After=ollama-shim.service
+Requires=ollama-shim.service
+
+[Service]
+Type=simple
+Nice=5
+WorkingDirectory=/var/lib/tangle-operator
+ExecStart=/opt/tangle-operator/current/operator-lite /etc/tangle-operator/config.json
+Restart=always
+RestartSec=10
+NoNewPrivileges=true
+UMask=0077
+
+[Install]
+WantedBy=default.target
