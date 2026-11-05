@@ -541,7 +541,9 @@ async fn test_non_streaming_through_handler() {
         "usage": {
             "prompt_tokens": 5,
             "completion_tokens": 1,
-            "total_tokens": 6
+            "total_tokens": 6,
+            "prompt_tokens_details": {"cached_tokens": 3},
+            "completion_tokens_details": {"reasoning_tokens": 1}
         }
     });
 
@@ -582,7 +584,7 @@ async fn test_non_streaming_through_handler() {
 
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["choices"][0]["message"]["content"], "Hello!");
-    assert_eq!(body["usage"]["prompt_tokens"], 5);
+    assert_eq!(body["usage"], response_body["usage"], "operator must preserve backend usage details for downstream billing");
 
     let usage: serde_json::Value = client
         .get(format!("http://127.0.0.1:{server_port}/v1/usage"))
