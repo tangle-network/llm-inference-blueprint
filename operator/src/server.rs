@@ -236,6 +236,8 @@ pub struct Usage {
     pub prompt_tokens: u32,
     pub completion_tokens: u32,
     pub total_tokens: u32,
+    #[serde(flatten)]
+    pub details: serde_json::Map<String, serde_json::Value>,
 }
 #[derive(Debug, Serialize)]
 struct ModelInfo {
@@ -348,11 +350,7 @@ async fn handle_non_streaming(
         vllm_response.usage.prompt_tokens,
         vllm_response.usage.completion_tokens,
     );
-    // Post-response settlement (spawned so the response returns immediately).
-    // `authorized` (with its per-account guard) moves into the task, so the
-    // account slot stays held through settlement and the rail is dispatched by
-    // the shared `settle_request` — shielded settles the metered cost via
-    // `settlePayment` (refunding the unused pre-auth), direct no-ops.
+    // Keep the account guard until asynchronous metered settlement finishes.
     if let Some(auth) = authorized {
         let actual_cost = backend.calculate_cost(
             vllm_response.usage.prompt_tokens,

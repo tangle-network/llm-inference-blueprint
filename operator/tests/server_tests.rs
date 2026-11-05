@@ -541,7 +541,9 @@ async fn test_non_streaming_through_handler() {
         "usage": {
             "prompt_tokens": 5,
             "completion_tokens": 1,
-            "total_tokens": 6
+            "total_tokens": 6,
+            "prompt_tokens_details": {"cached_tokens": 3},
+            "completion_tokens_details": {"reasoning_tokens": 1}
         }
     });
 
@@ -582,7 +584,10 @@ async fn test_non_streaming_through_handler() {
 
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["choices"][0]["message"]["content"], "Hello!");
-    assert_eq!(body["usage"]["prompt_tokens"], 5);
+    assert_eq!(
+        body["usage"], response_body["usage"],
+        "operator must preserve backend usage details for downstream billing"
+    );
 
     let usage: serde_json::Value = client
         .get(format!("http://127.0.0.1:{server_port}/v1/usage"))
@@ -1173,62 +1178,6 @@ async fn test_unmetered_fallback_sends_claim_payment() {
 }
 
 // ─── Wiremock Integration Tests ──────────────────────────────────────────
-
-#[tokio::test]
-async fn test_non_streaming_via_wiremock() {
-    let mock_server = MockServer::start().await;
-
-    let response_body = serde_json::json!({
-        "id": "chatcmpl-test",
-        "object": "chat.completion",
-        "created": 1700000000u64,
-        "model": "test-model",
-        "choices": [{
-            "index": 0,
-            "message": {"role": "assistant", "content": "Hello!"},
-            "finish_reason": "stop"
-        }],
-        "usage": {
-            "prompt_tokens": 5,
-            "completion_tokens": 1,
-            "total_tokens": 6
-        }
-    });
-
-    Mock::given(method("POST"))
-        .and(path("/v1/chat/completions"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(&response_body))
-        .mount(&mock_server)
-        .await;
-
-    let port = mock_server.address().port();
-    let client = reqwest::Client::new();
-    let url = format!("http://127.0.0.1:{port}/v1/chat/completions");
-
-    let vllm_body = serde_json::json!({
-        "model": "test-model",
-        "messages": [{"role": "user", "content": "Hi"}],
-        "max_tokens": 512,
-        "temperature": 0.7,
-        "stream": false,
-    });
-
-    let resp = client
-        .post(&url)
-        .json(&vllm_body)
-        .send()
-        .await
-        .unwrap()
-        .error_for_status()
-        .unwrap()
-        .json::<serde_json::Value>()
-        .await
-        .unwrap();
-
-    assert_eq!(resp["choices"][0]["message"]["content"], "Hello!");
-    assert_eq!(resp["usage"]["prompt_tokens"], 5);
-    assert_eq!(resp["usage"]["completion_tokens"], 1);
-}
 
 #[tokio::test]
 async fn test_streaming_via_wiremock() {
