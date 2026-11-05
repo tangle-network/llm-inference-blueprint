@@ -10,7 +10,6 @@ on:
 permissions:
   contents: write
 env:
-  CARGO_TERM_COLOR: always
   TARGET: x86_64-unknown-linux-gnu
 jobs:
   release:
@@ -20,14 +19,11 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.tag || github.ref }}
-      - name: System dependencies
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler libprotobuf-dev libssl-dev pkg-config clang cmake
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: '1.93'
-      - uses: Swatinem/rust-cache@v2
       - name: Build operators
-        run: cargo build --locked --release -p llm-inference --bins
+        run: |
+          docker build --platform linux/amd64 --target builder -f operator/Dockerfile -t operator-release .
+          mkdir -p target/release
+          docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/target/release:/export" operator-release sh -c 'cp /out/* /export/'
       - name: Package operators
         run: |
           for binary in llm-operator operator-lite; do
