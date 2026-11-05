@@ -21,7 +21,7 @@ jobs:
         with:
           ref: ${{ inputs.tag || github.ref }}
       - name: System dependencies
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler libssl-dev pkg-config clang
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler libssl-dev pkg-config clang cmake
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: '1.93'
