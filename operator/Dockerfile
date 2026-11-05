@@ -1,43 +1,18 @@
-FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04 AS base
-
-# System deps
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3 python3-pip python3-venv \
-    curl ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install vLLM
-RUN python3 -m pip install --no-cache-dir vllm==0.6.4
-
-# ── Build Rust operator ──────────────────────────────────────────────────
-FROM rust:1.82-bookworm AS builder
-
+FROM rust:1.93-bookworm AS builder
+RUN apt-get update && apt-get install -y --no-install-recommends protobuf-compiler libssl-dev pkg-config clang cmake && rm -rf /var/lib/apt/lists/*
 WORKDIR /build
-COPY Cargo.toml ./
+COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY operator/ operator/
+RUN cargo build --locked --release -p llm-inference --bins
 
-# Build release binary
-RUN cargo build --release -p vllm-operator
-
-# ── Final image ──────────────────────────────────────────────────────────
-FROM base
-
-# Copy operator binary
-COPY --from=builder /build/target/release/vllm-operator /usr/local/bin/vllm-operator
-
-# Create non-root user
+FROM vllm/vllm-openai:v0.32.0-cu129-ubuntu2404
+COPY --from=builder /build/target/release/llm-operator /build/target/release/operator-lite /usr/local/bin/
 RUN useradd -m -s /bin/bash operator
 USER operator
 WORKDIR /home/operator
-
-# Default config location
-ENV VLLM_OP_CONFIG=/home/operator/config.json
-
-# Expose operator HTTP port and vLLM internal port
+RUN mkdir -p /home/operator/.cache/huggingface /home/operator/state
 EXPOSE 8080 8000
-
-# Health check
-HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
-    CMD curl -f http://localhost:8080/health || exit 1
-
-ENTRYPOINT ["vllm-operator"]
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD curl -f http://localhost:8080/health || exit 1
+ENTRYPOINT ["llm-operator"]
+ENV VLLM_OP_CONFIG=/home/operator/config.json HF_HOME=/home/operator/.cache/huggingface DATA_DIR=/home/operator/state KEYSTORE_URI=/home/operator/state/keystore PROTOCOL=tangle VLLM_OP_BILLING__NONCE_STORE_PATH=/home/operator/state/nonces.json
+CMD ["run"]

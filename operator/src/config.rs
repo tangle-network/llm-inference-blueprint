@@ -10,15 +10,12 @@ pub use tangle_inference_core::{BillingConfig, GpuConfig, ServerConfig, TangleCo
 /// Top-level operator configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OperatorConfig {
-    /// Tangle network configuration (shared).
     pub tangle: TangleConfig,
     /// vLLM subprocess + per-token pricing configuration (vllm-specific).
     pub vllm: VllmConfig,
-    /// HTTP server configuration (shared).
     pub server: ServerConfig,
     /// Billing / ShieldedCredits configuration (shared).
     pub billing: BillingConfig,
-    /// GPU configuration (shared).
     pub gpu: GpuConfig,
     /// QoS heartbeat configuration (optional — disabled by default).
     #[serde(default)]
@@ -135,6 +132,7 @@ impl OperatorConfig {
         // Env vars override file config. Prefix: VLLM_OP_ (e.g. VLLM_OP_TANGLE__RPC_URL).
         builder = builder.add_source(
             config::Environment::with_prefix("VLLM_OP")
+                .prefix_separator("_")
                 .separator("__")
                 .try_parsing(true),
         );

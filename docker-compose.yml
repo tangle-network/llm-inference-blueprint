@@ -3,15 +3,23 @@ services:
     build:
       context: .
       dockerfile: operator/Dockerfile
+    command: ["run", "--keystore-uri", "/home/operator/state/keystore"]
     ports:
       - "8080:8080"
     volumes:
       - ./deploy/config.example.json:/home/operator/config.json:ro
       - huggingface-cache:/home/operator/.cache/huggingface
+      - operator-state:/home/operator/state
     environment:
       - VLLM_OP_CONFIG=/home/operator/config.json
       - VLLM_OP_TANGLE__OPERATOR_KEY=${OPERATOR_KEY}
       - HF_TOKEN=${HF_TOKEN}
+      - HTTP_RPC_URL=${RPC_URL:?Set RPC_URL}
+      - WS_RPC_URL=${WS_RPC_URL:?Set WS_RPC_URL}
+      - BLUEPRINT_ID=${BLUEPRINT_ID:?Set BLUEPRINT_ID}
+      - SERVICE_ID=${SERVICE_ID:?Set SERVICE_ID}
+      - TANGLE_CONTRACT=${TANGLE_CONTRACT:?Set TANGLE_CONTRACT}
+      - STAKING_CONTRACT=${STAKING_CONTRACT:?Set STAKING_CONTRACT}
     deploy:
       resources:
         reservations:
@@ -30,3 +38,4 @@ services:
 
 volumes:
   huggingface-cache:
+  operator-state:
