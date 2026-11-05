@@ -1,12 +1,12 @@
 FROM rust:1.93-bookworm AS builder
-RUN apt-get update && apt-get install -y --no-install-recommends protobuf-compiler libssl-dev pkg-config clang cmake && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends protobuf-compiler libprotobuf-dev libssl-dev pkg-config clang cmake && rm -rf /var/lib/apt/lists/*
 WORKDIR /build
 COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY operator/ operator/
-RUN cargo build --locked --release -p llm-inference --bins
+RUN --mount=type=cache,target=/build/target --mount=type=cache,target=/usr/local/cargo/registry --mount=type=cache,target=/usr/local/cargo/git cargo build --locked --release -p llm-inference --bins && mkdir /out && cp target/release/llm-operator target/release/operator-lite /out/
 
 FROM vllm/vllm-openai:v0.32.0-cu129-ubuntu2404
-COPY --from=builder /build/target/release/llm-operator /build/target/release/operator-lite /usr/local/bin/
+COPY --from=builder /out/ /usr/local/bin/
 RUN useradd -m -s /bin/bash operator
 USER operator
 WORKDIR /home/operator
