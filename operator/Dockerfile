@@ -7,7 +7,7 @@ RUN --mount=type=cache,target=/build/target --mount=type=cache,target=/usr/local
 
 FROM vllm/vllm-openai:v0.32.0-cu129-ubuntu2404
 COPY --from=builder /out/ /usr/local/bin/
-RUN useradd -m -s /bin/bash operator
+RUN useradd -m -g operator -s /bin/bash operator
 USER operator
 WORKDIR /home/operator
 RUN mkdir -p /home/operator/.cache/huggingface /home/operator/state
