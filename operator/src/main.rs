@@ -44,16 +44,13 @@ fn registration_payload(config: &OperatorConfig) -> Vec<u8> {
 async fn main() -> Result<(), blueprint_sdk::Error> {
     setup_log();
 
-    // Load operator config
     let config_path = std::env::var("VLLM_OP_CONFIG").ok();
     let config = OperatorConfig::load(config_path.as_deref())
         .map_err(|e| blueprint_sdk::Error::Other(format!("config load failed: {e}")))?;
     let config = Arc::new(config);
 
-    // Load blueprint environment
     let env = BlueprintEnvironment::load()?;
 
-    // Registration mode: emit registration inputs and exit
     if env.registration_mode() {
         let payload = registration_payload(&config);
         let output_path = env.registration_output_path();
@@ -71,7 +68,6 @@ async fn main() -> Result<(), blueprint_sdk::Error> {
         return Ok(());
     }
 
-    // Check GPU availability (non-fatal)
     match detect_gpus().await {
         Ok(gpus) => {
             tracing::info!(count = gpus.len(), "detected GPUs");
@@ -84,13 +80,11 @@ async fn main() -> Result<(), blueprint_sdk::Error> {
         }
     }
 
-    // Get Tangle client
     let tangle_client = env
         .tangle_client()
         .await
         .map_err(|e| blueprint_sdk::Error::Other(e.to_string()))?;
 
-    // Get service ID
     let service_id = env
         .protocol_settings
         .tangle()
@@ -98,11 +92,9 @@ async fn main() -> Result<(), blueprint_sdk::Error> {
         .service_id
         .ok_or_else(|| blueprint_sdk::Error::Other("No service ID configured".to_string()))?;
 
-    // Producer + Consumer
     let tangle_producer = TangleProducer::new(tangle_client.clone(), service_id);
     let tangle_consumer = TangleConsumer::new(tangle_client.clone());
 
-    // ── QoS heartbeat ────────────────────────────────────────────────
     let qos_enabled = config
         .qos
         .as_ref()
@@ -122,7 +114,6 @@ async fn main() -> Result<(), blueprint_sdk::Error> {
         tracing::info!("QoS heartbeat disabled");
     }
 
-    // Background service: vLLM subprocess + HTTP server
     let inference_server = InferenceServer {
         config: config.clone(),
     };

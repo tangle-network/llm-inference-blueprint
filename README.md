@@ -49,8 +49,11 @@ The audit exclusion is for the Blueprint dependency's disabled EigenLayer featur
 
 `operator/Dockerfile` builds both binaries in `operator/Cargo.toml` and uses the
 [vLLM CUDA image](https://docs.vllm.ai/en/v0.32.0/deployment/docker/).
-Run `docker compose up --build operator` with the NVIDIA container runtime and
-edit `deploy/config.example.json` for your chain, model and payment settings.
+Edit `deploy/config.example.json` for the chain, model and payment settings.
+Set the required SDK RPC, blueprint, service and contract variables listed in
+[docker-compose.yml](docker-compose.yml), provision the operator keystore in its
+state volume (`--keystore-uri /home/operator/state/keystore`), then run
+`docker compose up --build operator` with the NVIDIA container runtime.
 `llm-operator` manages the engine; `operator-lite` connects to an existing
 OpenAI-compatible backend such as the GTR Ollama shim.
 

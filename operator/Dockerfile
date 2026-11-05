@@ -10,8 +10,9 @@ COPY --from=builder /build/target/release/llm-operator /build/target/release/ope
 RUN useradd -m -s /bin/bash operator
 USER operator
 WORKDIR /home/operator
+RUN mkdir -p /home/operator/.cache/huggingface /home/operator/state
 EXPOSE 8080 8000
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD curl -f http://localhost:8080/health || exit 1
 ENTRYPOINT ["llm-operator"]
-ENV VLLM_OP_CONFIG=/home/operator/config.json
-CMD []
+ENV VLLM_OP_CONFIG=/home/operator/config.json HF_HOME=/home/operator/.cache/huggingface
+CMD ["run"]
