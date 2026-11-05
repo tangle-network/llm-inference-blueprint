@@ -14,7 +14,6 @@ services:
       - VLLM_OP_CONFIG=/home/operator/config.json
       - VLLM_OP_TANGLE__OPERATOR_KEY=${OPERATOR_KEY}
       - HF_TOKEN=${HF_TOKEN}
-      - DATA_DIR=/home/operator/state
       - HTTP_RPC_URL=${RPC_URL:?Set RPC_URL}
       - WS_RPC_URL=${WS_RPC_URL:?Set WS_RPC_URL}
       - BLUEPRINT_ID=${BLUEPRINT_ID:?Set BLUEPRINT_ID}
