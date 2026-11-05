@@ -584,7 +584,10 @@ async fn test_non_streaming_through_handler() {
 
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["choices"][0]["message"]["content"], "Hello!");
-    assert_eq!(body["usage"], response_body["usage"], "operator must preserve backend usage details for downstream billing");
+    assert_eq!(
+        body["usage"], response_body["usage"],
+        "operator must preserve backend usage details for downstream billing"
+    );
 
     let usage: serde_json::Value = client
         .get(format!("http://127.0.0.1:{server_port}/v1/usage"))
