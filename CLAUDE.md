@@ -13,6 +13,6 @@ Preserve payment rejection and settlement capped by the authorized amount.
 [harness_e2e.rs](operator/tests/harness_e2e.rs) exercises on-chain job submission and returned results with a substituted inference backend.
 It returns early when required chain artifacts are absent; check that the flow actually ran before claiming success.
 Its handler initialization is process-global, so follow the test's isolation constraints.
-[local_e2e.rs](operator/tests/local_e2e.rs) checks a real inference backend and requires its documented opt-in and running service.
+[http-e2e.mjs](sdk/scripts/http-e2e.mjs) accepts `--operator-lite-bin` to start the qualified binary and prove real backend output and cached usage.
 Neither a skipped test nor a backend substitute proves real model output.
 Exercise contract changes with actual deployments under `contracts/`.

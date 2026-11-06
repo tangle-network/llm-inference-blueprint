@@ -51,8 +51,7 @@
 - [x] Dockerfile with CUDA + vLLM + Rust binary
 - [x] docker-compose for local dev (with nvidia GPU runtime)
 - [x] Example config
-- [x] GitHub Actions CI (fmt, clippy, test, audit, forge test)
-- [x] E2E tests (local_e2e.rs, harness_e2e.rs, server_tests.rs)
+- [x] HTTP and chain integration tests; `sdk/scripts/http-e2e.mjs --operator-lite-bin` proves the served binary against a real backend
 - [ ] Multi-arch Docker builds (amd64 + arm64 via buildx)
 - [ ] Kubernetes Helm chart
 - [ ] Load testing (k6 or locust)
