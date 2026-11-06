@@ -3,8 +3,8 @@
 //! the real Rust operator code path (real signature verification, real
 //! authorizeSpend/settlePayment on-chain) without needing a full Tangle node.
 //!
-//! Existing external endpoints remain attach-only. A configured base_family
-//! starts the selected core recipe unless external=true.
+//! Existing external endpoints remain attach-only. An explicit SGLang engine
+//! or base_family starts the core recipe unless external=true.
 
 use std::sync::Arc;
 
@@ -25,7 +25,6 @@ fn setup_log() {
 async fn main() -> anyhow::Result<()> {
     setup_log();
 
-    // Load config from optional file + VLLM_OP_* env vars
     let path = std::env::args().nth(1);
     let config = Arc::new(OperatorConfig::load(path.as_deref())?);
     tracing::info!(
@@ -38,7 +37,10 @@ async fn main() -> anyhow::Result<()> {
     );
 
     let vllm = Arc::new(
-        if config.vllm.base_family.is_some() && !config.vllm.external {
+        if !config.vllm.external
+            && (config.vllm.base_family.is_some()
+                || config.vllm.engine.engine == tangle_inference_core::engine::EngineKind::Sglang)
+        {
             let process = ChatClient::spawn(config.clone()).await?;
             process.wait_ready().await?;
             process
@@ -47,15 +49,12 @@ async fn main() -> anyhow::Result<()> {
         },
     );
 
-    // Build billing client via the shared core constructor.
     let billing = Arc::new(BillingClient::new(&config.tangle, &config.billing)?);
     let operator_address = billing.operator_address();
     tracing::info!(%operator_address, "billing client ready");
 
-    // Persistent nonce replay store
     let nonce_store = Arc::new(NonceStore::load(config.billing.nonce_store_path.clone()));
 
-    // Build AppState via the shared builder, attaching the VllmBackend.
     let backend = VllmBackend::new(config.clone(), vllm.clone());
     let state = AppStateBuilder::new()
         .billing(billing)
@@ -67,7 +66,6 @@ async fn main() -> anyhow::Result<()> {
         .backend(backend)
         .build()?;
 
-    // Start the HTTP server
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let handle = server::start(state, shutdown_rx).await?;
     tracing::info!("operator-lite HTTP server running — Ctrl+C to stop");
