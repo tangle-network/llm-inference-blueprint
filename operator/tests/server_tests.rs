@@ -594,6 +594,23 @@ async fn test_openai_controls_and_model_metadata_through_http() {
         .await
         .unwrap();
     assert_eq!(models["data"][0]["context_length"], 4096);
+    let operator = client
+        .get(format!("http://127.0.0.1:{port}/v1/operator"))
+        .send()
+        .await
+        .unwrap()
+        .json::<serde_json::Value>()
+        .await
+        .unwrap();
+    assert!(
+        operator["tee"].is_object(),
+        "operator discovery omitted SDK TEE status"
+    );
+    assert!(operator["tee"]["detected"].as_bool().is_some());
+    assert_eq!(
+        operator["tee"]["attested"], false,
+        "this flow supplied no attestation"
+    );
     body["model"] = serde_json::json!("missing");
     assert_eq!(
         client
