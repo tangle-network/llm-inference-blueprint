@@ -115,7 +115,7 @@ with tempfile.TemporaryDirectory(prefix='native-registration-') as temp:
                 '--tangle-contract', registry, '--staking-contract', registry, '--status-registry-contract', registry]
         # The public registry relays the attacker's own signed request to the real manager.
         foreign = run(args + ['--keystore-path', str(temp / 'attacker')], check=False)
-        assert foreign.returncode != 0, 'foreign registry relay acquired the manager'
+        assert foreign.returncode != 0 and 'OnlyBlueprintOwnerAllowed' in foreign.stdout + foreign.stderr, foreign
         assert int(read(registry, 'blueprintCount()(uint64)').split()[0]) == 0
         run(args + ['--keystore-path', str(temp / 'creator')])
         assert int(read(registry, 'blueprintCount()(uint64)').split()[0]) == 1
@@ -135,6 +135,11 @@ with tempfile.TemporaryDirectory(prefix='native-registration-') as temp:
         assert declared['min_vram_gb'] == (configured['gpu']['min_vram_mib'] * 1048576 + 999999999) // 1000000000
         assert declared['min_count'] == configured['gpu']['expected_gpu_count']
         assert configured['vllm']['model'] in definition['metadata']['description']
+        model = configured['vllm']['model']
+        key = run(['cast', 'keccak', model]).stdout.strip()
+        stored = run(['cast', 'call', manager, 'modelConfigs(bytes32)(uint32,uint64,uint64,uint32,bool)', key, '--rpc-url', url]).stdout.split()
+        assert stored == [str(configured['vllm']['max_model_len']), str(configured['vllm']['price_per_input_token']),
+                          str(configured['vllm']['price_per_output_token']), str(configured['gpu']['min_vram_mib']), 'true'], stored
         metadata_wire = run(['cast', 'call', registry, 'blueprintMetadata(uint64)', '0', '--rpc-url', url]).stdout.strip()
         metadata = run(['cast', 'decode-abi', '--json', 'blueprintMetadata(uint64)((' + ','.join(['string'] * 9) + '),string,bytes32)', metadata_wire]).stdout
         decoded = json.loads(metadata)
@@ -144,7 +149,7 @@ with tempfile.TemporaryDirectory(prefix='native-registration-') as temp:
         assert observed_profile == json.loads(profile), (observed_profile, profile)
         assert bytes.fromhex(binary_sha) in wire, 'registered binary digest changed'
         repeated = run(args + ['--keystore-path', str(temp / 'creator')], check=False)
-        assert repeated.returncode != 0, 'manager accepted a second blueprint binding'
+        assert repeated.returncode != 0 and 'AlreadyInitialized' in repeated.stdout + repeated.stderr, repeated
         assert int(read(registry, 'blueprintCount()(uint64)').split()[0]) == 1
         report = {'source': run(['git', 'rev-parse', 'HEAD']).stdout.strip(), 'registry': registry,
                   'manager': manager, 'creator': creator, 'blueprint_id': 0, 'profiling_data': observed_profile,

@@ -8,7 +8,7 @@
     "license": "MIT OR Apache-2.0",
     "website": "https://tangle.tools",
     "code_repository": "https://github.com/tangle-network/llm-inference-blueprint",
-    "profiling_data": "{\"execution_profile\":{\"gpu\":{\"policy\":\"required\",\"min_count\":1,\"min_vram_gb\":17}}}",
+    "profiling_data": "{\"execution_profile\":{\"gpu\":{\"policy\":\"required\",\"min_count\":1,\"min_vram_gb\":22}}}",
     "category": "AI/Inference"
   },
   "config": {

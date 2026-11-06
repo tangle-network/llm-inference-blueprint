@@ -29,7 +29,7 @@
   },
   "gpu": {
     "expected_gpu_count": 1,
-    "min_vram_mib": 16000,
+    "min_vram_mib": 20480,
     "monitor_interval_secs": 30
   }
 }
