@@ -60,11 +60,10 @@ state volume (`--keystore-uri /home/operator/state/keystore`), then run
 
 `operator-lite` takes an optional configuration file as its first argument. Without one it reads `VLLM_OP_` environment variables, with `__` between nested fields, such as `VLLM_OP_SERVER__PORT`.
 
-Tagged releases publish both Linux binaries, archive checksums and extracted
-binary checksums through [Release](.github/workflows/release.yml).
-To install the GTR user service, download a chosen release, verify its archive
-with `sha256sum -c operator-lite-x86_64-unknown-linux-gnu.tar.xz.sha256`, extract
-it, then verify `sha256sum -c operator-lite.sha256`.
+Tagged releases use [cargo-dist](dist-workspace.toml) to publish a native archive
+containing both Linux binaries, its checksum and `dist-manifest.json`.
+To install the GTR user service, verify the chosen archive with
+`sha256sum -c llm-inference-x86_64-unknown-linux-gnu.tar.xz.sha256`, then extract it.
 Install the verified binary under `/opt/tangle-operator/releases/<tag>/` and
 atomically point `/opt/tangle-operator/current` at that directory. Retain the
 previous release for recovery. Install private config at
@@ -76,7 +75,7 @@ the systemd search path before replacing it. With `ollama-shim.service` running,
 wait for `/metrics` active requests to reach zero, then run
 `systemctl --user daemon-reload && systemctl --user enable --now gtr-operator`.
 For an upgrade, restart the service. Verify `/proc/<MainPID>/exe` against the
-release binary checksum, `/health`, `/v1/models` and a real routed completion.
+verified extracted binary, `/health`, `/v1/models` and a real routed completion.
 On failure, switch `current` to the retained release and restart, then repeat
 these checks. Never reset the nonce store during an upgrade or recovery.
 
@@ -94,7 +93,3 @@ owns Router price units; coordinate any native-payment price migration with it.
 ## License
 
 MIT
-
-## Release definitions
-
-`deploy/register-blueprint.sh` reads the prepared definition from this repository's latest GitHub Release. The release workflow packages the actual binary digest, SDK download manifest, and execution profile together. Set `BLUEPRINT_DEFINITION` to a prepared definition for a specific release. For a local Anvil proof only, set `BLUEPRINT_BINARY` to the built operator binary; registration hashes that file and requires a loopback RPC on chain 31337.

@@ -2,6 +2,10 @@
 members = ["operator"]
 resolver = "2"
 
+[profile.dist]
+inherits = "release"
+lto = "thin"
+
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
