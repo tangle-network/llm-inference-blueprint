@@ -40,6 +40,8 @@ jobs:
           CARGO_NET_OFFLINE=true dist build --tag "$TAG" --artifacts=all --output-format=json > "$RUNNER_TEMP/dist-manifest.json"
           git diff --exit-code -- Cargo.lock
       - name: Qualify operator-lite serving image
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           CORE_REVISION=$(python3 -c 'import tomllib; print(tomllib.load(open("operator/Cargo.toml", "rb"))["dependencies"]["tangle-inference-core"]["rev"])')
           [[ "$CORE_REVISION" =~ ^[a-f0-9]{40}$ ]]
@@ -48,7 +50,17 @@ jobs:
           [[ "$ENGINE_IMAGE" =~ @sha256:[a-f0-9]{64}$ ]]
           export CORE_REVISION ENGINE_IMAGE
           COMMIT=$(git rev-parse HEAD)
-          docker build --platform linux/amd64 --target operator-lite -f operator/Dockerfile --build-arg ENGINE_IMAGE="$ENGINE_IMAGE" --build-arg VCS_REF="$COMMIT" --build-arg CORE_REVISION="$CORE_REVISION" -t qualified-operator-lite .
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}/operator-lite"
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          if gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern operator-lite-image.txt --dir "$RUNNER_TEMP/prior-image"; then
+            PRIOR_IMAGE=$(cat "$RUNNER_TEMP/prior-image/operator-lite-image.txt")
+            [[ "$PRIOR_IMAGE" == "$IMAGE@sha256:"* && "${PRIOR_IMAGE#"$IMAGE@sha256:"}" =~ ^[a-f0-9]{64}$ ]]
+            docker pull "$PRIOR_IMAGE"
+            docker tag "$PRIOR_IMAGE" qualified-operator-lite
+            cp "$RUNNER_TEMP/prior-image/operator-lite-image.txt" "$RUNNER_TEMP/operator-lite-image.txt"
+          else
+            docker build --platform linux/amd64 --target operator-lite -f operator/Dockerfile --build-arg ENGINE_IMAGE="$ENGINE_IMAGE" --build-arg VCS_REF="$COMMIT" --build-arg CORE_REVISION="$CORE_REVISION" -t qualified-operator-lite .
+          fi
           docker image inspect qualified-operator-lite > "$RUNNER_TEMP/operator-lite-image.json"
           python3 - <<'VERIFY'
           import json, os, subprocess
@@ -69,7 +81,7 @@ jobs:
             gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "$TAG" --generate-notes --draft
           UPLOAD_FILES=$(jq -er '.upload_files[]' "$RUNNER_TEMP/dist-manifest.json")
           mapfile -t FILES <<< "$UPLOAD_FILES"
-          FILES+=("$RUNNER_TEMP/dist-manifest.json")
+          FILES+=("$RUNNER_TEMP/dist-manifest.json" "$RUNNER_TEMP/operator-lite-image.txt")
           ASSETS=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')
           for file in "${FILES[@]}"; do
             name=$(basename "$file")
@@ -78,15 +90,15 @@ jobs:
               cmp "$RUNNER_TEMP/prior-release/$name" "$file"
             fi
           done
-          IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}/operator-lite"
-          COMMIT=$(git rev-parse HEAD)
-          printf '%s' "$GH_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
-          docker tag qualified-operator-lite "$IMAGE:sha-$COMMIT"
-          docker tag qualified-operator-lite "$IMAGE:$TAG"
-          docker push "$IMAGE:sha-$COMMIT"
-          docker push "$IMAGE:$TAG"
-          docker image inspect --format '{{index .RepoDigests 0}}' "$IMAGE:sha-$COMMIT" > "$RUNNER_TEMP/operator-lite-image.txt"
-          grep -Eq '^ghcr.io/.+@sha256:[a-f0-9]{64}$' "$RUNNER_TEMP/operator-lite-image.txt"
-          FILES+=("$RUNNER_TEMP/operator-lite-image.txt")
+          if ! test -s "$RUNNER_TEMP/operator-lite-image.txt"; then
+            IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}/operator-lite"
+            COMMIT=$(git rev-parse HEAD)
+            docker tag qualified-operator-lite "$IMAGE:sha-$COMMIT"
+            docker tag qualified-operator-lite "$IMAGE:$TAG"
+            docker push "$IMAGE:sha-$COMMIT"
+            docker push "$IMAGE:$TAG"
+            docker image inspect --format '{{index .RepoDigests 0}}' "$IMAGE:sha-$COMMIT" > "$RUNNER_TEMP/operator-lite-image.txt"
+            grep -Eq '^ghcr.io/.+@sha256:[a-f0-9]{64}$' "$RUNNER_TEMP/operator-lite-image.txt"
+          fi
           gh release upload "$TAG" "${FILES[@]}" --repo "$GITHUB_REPOSITORY" --clobber
           gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false
