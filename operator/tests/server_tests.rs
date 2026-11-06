@@ -710,3 +710,44 @@ async fn test_minor_content_policy_at_http_boundary() {
     shutdown.send(true).unwrap();
     handle.await.unwrap();
 }
+
+#[tokio::test]
+async fn test_empty_backend_stream_is_retryable_before_http_success() {
+    let peer = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/health"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&peer)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(ResponseTemplate::new(200)
+            .insert_header("content-type", "text/event-stream")
+            .set_body_string("data: {\"model\":\"test-model\",\"choices\":[{\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null}]}\n\ndata: [DONE]\n\n"))
+        .mount(&peer).await;
+    let (port, shutdown, handle) = start_test_server(peer.address().port()).await;
+    let began = std::time::Instant::now();
+    let response = reqwest::Client::new()
+        .post(format!("http://127.0.0.1:{port}/v1/chat/completions"))
+        .json(&serde_json::json!({"model":"test-model","stream":true,
+            "messages":[{"role":"user","content":"Reply READY."}]}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        response.status(),
+        503,
+        "empty role preamble was reported as a successful generation"
+    );
+    assert!(began.elapsed() < std::time::Duration::from_millis(12500));
+    assert!(
+        response.headers()["retry-after"]
+            .to_str()
+            .unwrap()
+            .parse::<u32>()
+            .unwrap()
+            > 0
+    );
+    shutdown.send(true).unwrap();
+    handle.await.unwrap();
+}
