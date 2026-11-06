@@ -17,7 +17,7 @@ contract Deploy is Script {
         address manager = address(
             new ERC1967Proxy(address(implementation), abi.encodeCall(InferenceBSM.initialize, (token, registry)))
         );
-        InferenceBSM(manager).configureModel(
+        InferenceBSM(payable(manager)).configureModel(
             vm.parseJsonString(config, ".vllm.model"),
             uint32(vm.parseJsonUint(config, ".vllm.max_model_len")),
             uint64(vm.parseJsonUint(config, ".vllm.price_per_input_token")),
