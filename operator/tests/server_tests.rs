@@ -44,6 +44,7 @@ fn test_config(vllm_port: u16) -> OperatorConfig {
             providers: vec![],
         },
         server: ServerConfig {
+            endpoint_key: None,
             host: "0.0.0.0".into(),
             port: 8080,
             max_concurrent_requests: 2,

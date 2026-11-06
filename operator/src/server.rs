@@ -131,6 +131,10 @@ pub async fn start(
         .layer(TimeoutLayer::new(Duration::from_secs(stream_timeout_secs)))
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            tangle_inference_core::server::authenticate_endpoint,
+        ))
         .with_state(state.clone());
     let listener = tokio::net::TcpListener::bind(&bind).await?;
     tracing::info!(bind = %bind, "HTTP server listening");
@@ -184,11 +188,7 @@ pub struct ChatCompletionRequest {
     /// ShieldedCredits spend authorization (required when billing_required is true).
     /// Can also be provided via x402 headers (X-Payment-Signature).
     pub spend_auth: Option<SpendAuthPayload>,
-    /// Plain-crypto payment proof (the Direct rail): a `DirectTransfer` carrying
-    /// the tx hash of an ERC-20 transfer to the operator. An alternative to
-    /// `spend_auth` — pay-per-call in USDC with no shielded pool. Authorized
-    /// through the generic payment provider (accepted when the `direct` rail is
-    /// enabled); ignored when the operator runs shielded-only.
+    /// Core payment proof; accepted rails come from the billing configuration.
     #[serde(default)]
     pub payment: Option<PaymentProof>,
     #[serde(flatten)]
