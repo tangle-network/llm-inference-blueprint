@@ -121,8 +121,14 @@ with tempfile.TemporaryDirectory(prefix='native-registration-') as temp:
         assert int(read(registry, 'blueprintCount()(uint64)').split()[0]) == 1
         assert int(read(manager, 'blueprintId()(uint64)').split()[0]) == 0
         assert read(manager, 'blueprintOwner()(address)').lower() == creator.lower()
-        data = run(['cast', 'call', registry, 'getBlueprintDefinition(uint64)', '0', '--rpc-url', url]).stdout.strip()
-        wire = bytes.fromhex(data.removeprefix('0x'))
+        # TNT 0.20 event-sources `sources`; the stored hash anchors the recorded definition bytes.
+        topic = run(['cast', 'keccak', 'BlueprintDefinitionRecorded(uint64,address,bytes)']).stdout.strip()
+        logs = rpc('eth_getLogs', [{'fromBlock': '0x0', 'toBlock': 'latest', 'topics': [topic, '0x' + '00' * 32]}])
+        assert len(logs) == 1 and int(logs[0]['topics'][2], 16) == int(creator, 16), logs
+        event = bytes.fromhex(logs[0]['data'].removeprefix('0x'))
+        wire = event[64:64 + int.from_bytes(event[32:64], 'big')]
+        recorded = run(['cast', 'keccak', '0x' + wire.hex()]).stdout.strip()
+        assert recorded == run(['cast', 'call', registry, 'blueprintDefinitionHash(uint64)(bytes32)', '0', '--rpc-url', url]).stdout.strip(), 'recorded definition is not the anchored one'
         profile = definition['metadata']['profiling_data']
         configured = json.loads((repo / 'deploy/config.example.json').read_text())
         declared = json.loads(profile)['execution_profile']['gpu']
