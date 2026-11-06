@@ -21,7 +21,8 @@
 # Local anvil (LocalTestnet snapshot):
 #
 #   export RPC_URL=http://127.0.0.1:8545
-#   ./deploy/register-blueprint.sh   # uses anvil deployer key + Tangle/USDC defaults
+#   export BLUEPRINT_BINARY=target/debug/llm-operator
+#   ./deploy/register-blueprint.sh   # requires PRIVATE_KEY and the local TANGLE_CORE
 #
 # Optional overrides:
 #   MODEL              vLLM model to advertise (default: meta-llama/Llama-3.1-8B-Instruct)
@@ -49,7 +50,7 @@ ENDPOINT="${ENDPOINT:-https://your-operator.example.com}"
 
 echo "=== vLLM Inference Blueprint Registration ==="
 echo "Network:     $(cast chain-id --rpc-url "$RPC_URL")"
-echo "Tangle Core: ${TANGLE_CORE:-<default from RegisterBlueprint.s.sol>}"
+echo "Tangle Core: $TANGLE_CORE"
 echo "Payment:     ${PAYMENT_TOKEN:-<default USDC sepolia>}"
 echo "Model:       $MODEL"
 echo "GPUs:        $GPU_COUNT x $GPU_MODEL ($TOTAL_VRAM MiB)"
@@ -58,6 +59,9 @@ echo ""
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 CORE_DIR="$(cargo metadata --manifest-path "$ROOT_DIR/Cargo.toml" --format-version 1 --locked | python3 -c 'import json,sys,pathlib; print(pathlib.Path(next(p["manifest_path"] for p in json.load(sys.stdin)["packages"] if p["name"] == "tangle-inference-core")).parent)')"
+BLUEPRINT_DEFINITION="$(node "$CORE_DIR/scripts/register-blueprint.mjs" "$ROOT_DIR/deploy/definition.json" "$ROOT_DIR")"
+export BLUEPRINT_DEFINITION
+trap 'rm -f -- "$BLUEPRINT_DEFINITION"' EXIT
 cd "$(dirname "$0")/../contracts"
 
 # Deploy BSM (impl + proxy + initialize) AND register the blueprint in one

@@ -48,6 +48,7 @@ async fn registration_preserves_definition_gpu_requirement() -> anyhow::Result<(
         .arg(root.join("deploy/register-blueprint.sh"))
         .current_dir(root)
         .env("RPC_URL", chain.http_endpoint().as_str())
+        .env("BLUEPRINT_BINARY", env!("CARGO_BIN_EXE_llm-operator"))
         .env("TANGLE_CORE", chain.tangle_contract.to_string())
         .env(
             "PAYMENT_TOKEN",

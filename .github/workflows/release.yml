@@ -9,6 +9,7 @@ on:
         required: true
 permissions:
   contents: write
+  packages: write
 env:
   TARGET: x86_64-unknown-linux-gnu
 jobs:
@@ -18,27 +19,65 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          ref: ${{ inputs.tag && format('refs/tags/{0}', inputs.tag) || github.ref }}
       - name: Build operators
         run: |
           docker build --platform linux/amd64 --target builder -f operator/Dockerfile -t operator-release .
           mkdir -p target/release
           docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/target/release:/export" operator-release sh -c 'cp /out/* /export/'
-      - name: Package operators
+      - name: Package SDK release sources
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
         run: |
-          for binary in llm-operator operator-lite; do
-            strip "target/release/$binary"
-            archive="$binary-$TARGET.tar.xz"
-            tar -cJf "$archive" -C target/release "$binary"
-            sha256sum "$archive" > "$archive.sha256"
-            (cd target/release && sha256sum "$binary") > "$binary.sha256"
-            cut -d' ' -f1 "$binary.sha256" > "$binary-$TARGET.bin.sha256"
-          done
-      - name: Publish GitHub Release
+          CORE_REVISION=$(python3 -c 'import tomllib; print(tomllib.load(open("operator/Cargo.toml", "rb"))["dependencies"]["tangle-inference-core"]["rev"])')
+          [[ "$CORE_REVISION" =~ ^[a-f0-9]{40}$ ]]
+          curl --fail --silent --show-error --location "https://raw.githubusercontent.com/tangle-network/tangle-inference-core/$CORE_REVISION/scripts/register-blueprint.mjs" -o "$RUNNER_TEMP/register-blueprint.mjs"
+          curl --fail --silent --show-error --location "https://raw.githubusercontent.com/tangle-network/tangle-inference-core/$CORE_REVISION/engine-profiles.json" -o "$RUNNER_TEMP/engine-profiles.json"
+          ENGINE_IMAGE=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["image"])' "$RUNNER_TEMP/engine-profiles.json")
+          [[ "$ENGINE_IMAGE" =~ @sha256:[a-f0-9]{64}$ ]]
+          echo "CORE_REVISION=$CORE_REVISION" >> "$GITHUB_ENV"
+          echo "ENGINE_IMAGE=$ENGINE_IMAGE" >> "$GITHUB_ENV"
+          strip target/release/llm-operator target/release/operator-lite
+          node "$RUNNER_TEMP/register-blueprint.mjs" --package --definition deploy/definition.json --output-dir release --tag "$TAG" --binary target/release/llm-operator --binary target/release/operator-lite
+      - name: Qualify operator-lite serving image
+        run: |
+          COMMIT=$(git rev-parse HEAD)
+          docker build --platform linux/amd64 --target operator-lite -f operator/Dockerfile --build-arg ENGINE_IMAGE="$ENGINE_IMAGE" --build-arg VCS_REF="$COMMIT" --build-arg CORE_REVISION="$CORE_REVISION" -t qualified-operator-lite .
+          docker image inspect qualified-operator-lite > "$RUNNER_TEMP/operator-lite-image.json"
+          python3 - <<'VERIFY'
+          import json, os, subprocess
+          image = json.load(open(os.environ["RUNNER_TEMP"] + "/operator-lite-image.json"))[0]["Config"]
+          assert image["Entrypoint"] == ["/usr/local/bin/operator-lite"]
+          assert image["Cmd"] in (None, []) and image["User"] == "operator"
+          labels = image["Labels"]
+          assert labels["org.opencontainers.image.revision"] == subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+          assert labels["org.opencontainers.image.base.name"] == os.environ["ENGINE_IMAGE"]
+          assert labels["tools.tangle.inference-core.revision"] == os.environ["CORE_REVISION"]
+          VERIFY
+          docker run --rm --entrypoint sh qualified-operator-lite -ec 'test "$(id -u)" != 0; ldd /usr/local/bin/operator-lite | tee /tmp/ldd; ! grep -q "not found" /tmp/ldd; python3 -c "import sglang.launch_server"'
+          CONTAINER=$(docker create qualified-operator-lite)
+          trap 'docker rm -f "$CONTAINER" >/dev/null' EXIT
+          docker cp "$CONTAINER:/usr/local/bin/operator-lite" "$RUNNER_TEMP/operator-lite"
+          cmp "$RUNNER_TEMP/operator-lite" target/release/operator-lite
+      - name: Publish GitHub Release and serving image
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 ||
             gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "$TAG" --generate-notes
-          gh release upload "$TAG" ./*.tar.xz ./*.sha256 --repo "$GITHUB_REPOSITORY" --clobber
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | grep -qx blueprint-definition.json; then
+            gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern blueprint-definition.json --dir "$RUNNER_TEMP/prior-release"
+            cmp "$RUNNER_TEMP/prior-release/blueprint-definition.json" release/blueprint-definition.json
+          fi
+          gh release upload "$TAG" release/*.tar.xz release/*.sha256 release/dist-manifest.json --repo "$GITHUB_REPOSITORY" --clobber
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}/operator-lite"
+          COMMIT=$(git rev-parse HEAD)
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          docker tag qualified-operator-lite "$IMAGE:sha-$COMMIT"
+          docker tag qualified-operator-lite "$IMAGE:$TAG"
+          docker push "$IMAGE:sha-$COMMIT"
+          docker push "$IMAGE:$TAG"
+          docker image inspect --format '{{index .RepoDigests 0}}' "$IMAGE:sha-$COMMIT" > release/operator-lite-image.txt
+          grep -Eq '^ghcr.io/.+@sha256:[a-f0-9]{64}$' release/operator-lite-image.txt
+          gh release upload "$TAG" release/operator-lite-image.txt release/blueprint-definition.json --repo "$GITHUB_REPOSITORY" --clobber

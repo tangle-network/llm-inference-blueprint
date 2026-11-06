@@ -1,10 +1,4 @@
-//! Minimal operator binary — runs the HTTP server + billing client without
-//! BlueprintRunner or Tangle Substrate. Used for E2E tests that exercise
-//! the real Rust operator code path (real signature verification, real
-//! authorizeSpend/settlePayment on-chain) without needing a full Tangle node.
-//!
-//! Existing external endpoints remain attach-only. An explicit SGLang engine
-//! or base_family starts the core recipe unless external=true.
+//! HTTP operator with core-owned engine and billing.
 
 use std::sync::Arc;
 
@@ -28,26 +22,20 @@ async fn main() -> anyhow::Result<()> {
     let path = std::env::args().nth(1);
     let config = Arc::new(OperatorConfig::load(path.as_deref())?);
     tracing::info!(
-        rpc_url = %config.tangle.rpc_url,
-        shielded_credits = %config.tangle.shielded_credits,
         vllm_host = %config.vllm.host,
         vllm_port = config.vllm.port,
         server_port = config.server.port,
         "operator-lite starting"
     );
 
-    let vllm = Arc::new(
-        if !config.vllm.external
-            && (config.vllm.base_family.is_some()
-                || config.vllm.engine.engine == tangle_inference_core::engine::EngineKind::Sglang)
-        {
-            let process = ChatClient::spawn(config.clone()).await?;
-            process.wait_ready().await?;
-            process
-        } else {
-            ChatClient::connect(config.clone())?
-        },
-    );
+    let managed = !config.vllm.external
+        && (config.vllm.base_family.is_some()
+            || config.vllm.engine.engine == tangle_inference_core::engine::EngineKind::Sglang);
+    let vllm = Arc::new(if managed {
+        ChatClient::spawn(config.clone()).await?
+    } else {
+        ChatClient::connect(config.clone())?
+    });
 
     let billing = Arc::new(BillingClient::new(&config.tangle, &config.billing)?);
     let operator_address = billing.operator_address();
@@ -70,17 +58,18 @@ async fn main() -> anyhow::Result<()> {
     let handle = server::start(state, shutdown_rx).await?;
     tracing::info!("operator-lite HTTP server running — Ctrl+C to stop");
 
-    tokio::select! {
-        result = vllm.supervise(shutdown_tx.subscribe()) => { result?; }
-        _ = tokio::signal::ctrl_c() => {
-            tracing::info!("received Ctrl+C, shutting down");
-        }
-        res = handle => {
-            tracing::warn!(?res, "HTTP server task ended");
-        }
-    }
-
+    let outcome: anyhow::Result<()> = tokio::select! {
+        result = async {
+            if managed { vllm.wait_ready().await?; }
+            vllm.supervise(shutdown_tx.subscribe()).await
+        } => result,
+        result = tokio::signal::ctrl_c() => result.map_err(Into::into),
+        result = handle => match result {
+            Ok(()) => Err(anyhow::anyhow!("HTTP server stopped")),
+            Err(error) => Err(error.into()),
+        },
+    };
     let _ = shutdown_tx.send(true);
     vllm.shutdown().await;
-    Ok(())
+    outcome
 }

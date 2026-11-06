@@ -91,3 +91,7 @@ owns Router price units; coordinate any native-payment price migration with it.
 ## License
 
 MIT
+
+## Release definitions
+
+`deploy/register-blueprint.sh` reads the prepared definition from this repository's latest GitHub Release. The release workflow packages the actual binary digest, SDK download manifest, and execution profile together. Set `BLUEPRINT_DEFINITION` to a prepared definition for a specific release. For a local Anvil proof only, set `BLUEPRINT_BINARY` to the built operator binary; registration hashes that file and requires a loopback RPC on chain 31337.
