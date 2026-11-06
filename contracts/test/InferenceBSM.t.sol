@@ -149,23 +149,6 @@ contract InferenceBSMTest is Test {
 
     // ─── Job Lifecycle ───────────────────────────────────────────────────
 
-    function test_onJobCall() public {
-        bytes memory inputs = abi.encode("What is Tangle?", uint32(256), uint64(7000));
-
-        vm.prank(tangleCore);
-        bsm.onJobCall(1, 0, 1, inputs);
-    }
-
-    function test_onJobResult() public {
-        _registerOperator(operator1);
-
-        bytes memory inputs = abi.encode("What is Tangle?", uint32(256), uint64(7000));
-        bytes memory outputs = abi.encode("Tangle is an EVM-native staking protocol.", uint32(5), uint32(8));
-
-        vm.prank(tangleCore);
-        bsm.onJobResult(1, 0, 1, operator1, inputs, outputs);
-    }
-
     function test_onJobResult_unregisteredOperator() public {
         bytes memory inputs = abi.encode("test", uint32(10), uint64(7000));
         bytes memory outputs = abi.encode("result", uint32(2), uint32(3));

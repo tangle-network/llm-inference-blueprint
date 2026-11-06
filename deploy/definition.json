@@ -3,12 +3,12 @@
   "manager": "0x0000000000000000000000000000000000000000",
   "metadata": {
     "name": "llm-inference",
-    "description": "vLLM-backed LLM inference operator with shielded billing via Tangle",
+    "description": "vLLM-backed meta-llama/Llama-3.1-8B-Instruct operator with shielded billing via Tangle",
     "author": "Tangle Network",
     "license": "MIT OR Apache-2.0",
     "website": "https://tangle.tools",
     "code_repository": "https://github.com/tangle-network/llm-inference-blueprint",
-    "profiling_data": "{\"execution_profile\":{\"gpu\":{\"policy\":\"required\",\"min_count\":1,\"min_vram_gb\":8}}}",
+    "profiling_data": "{\"execution_profile\":{\"gpu\":{\"policy\":\"required\",\"min_count\":1,\"min_vram_gb\":17}}}",
     "category": "AI/Inference"
   },
   "config": {

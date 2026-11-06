@@ -117,6 +117,11 @@ with tempfile.TemporaryDirectory(prefix='native-registration-') as temp:
         data = run(['cast', 'call', registry, 'getBlueprintDefinition(uint64)', '0', '--rpc-url', url]).stdout.strip()
         wire = bytes.fromhex(data.removeprefix('0x'))
         profile = definition['metadata']['profiling_data']
+        configured = json.loads((repo / 'deploy/config.example.json').read_text())
+        declared = json.loads(profile)['execution_profile']['gpu']
+        assert declared['min_vram_gb'] == (configured['gpu']['min_vram_mib'] * 1048576 + 999999999) // 1000000000
+        assert declared['min_count'] == configured['gpu']['expected_gpu_count']
+        assert configured['vllm']['model'] in definition['metadata']['description']
         metadata = run(['cast', 'call', registry, 'blueprintMetadata(uint64)((' + ','.join(['string'] * 9) + '),string,bytes32)',
                         '0', '--rpc-url', url, '--json']).stdout
         decoded = json.loads(metadata)['data'][0]
@@ -127,6 +132,8 @@ with tempfile.TemporaryDirectory(prefix='native-registration-') as temp:
         assert int(read(registry, 'blueprintCount()(uint64)').split()[0]) == 1
         report = {'source': run(['git', 'rev-parse', 'HEAD']).stdout.strip(), 'registry': registry,
                   'manager': manager, 'creator': creator, 'blueprint_id': 0, 'profiling_data': profile,
+                  'declared_model': configured['vllm']['model'], 'declared_max_model_len': configured['vllm']['max_model_len'],
+                  'declared_vram_mib': configured['gpu']['min_vram_mib'], 'gpu_requirement_basis': 'Unmeasured config.example.json minimum, rounded up to integer decimal GB',
                   'binary_sha256': binary_sha, 'binary_bytes': binary.stat().st_size,
                   'binary_path': str(binary), 'cli_version': run([a.cli, '--version']).stdout.strip(),
                   'cli_sha256': hashlib.sha256(Path(shutil.which(a.cli)).read_bytes()).hexdigest(),
