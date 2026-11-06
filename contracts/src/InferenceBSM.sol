@@ -3,9 +3,9 @@ pragma solidity ^0.8.26;
 import { EnumerableSet } from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 import { Initializable } from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import { UUPSUpgradeable } from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
-import { InferenceBSMBase } from "tangle-inference-core/InferenceBSMBase.sol";
+import { BlueprintServiceManagerBase } from "tnt-core/BlueprintServiceManagerBase.sol";
 /// @notice vLLM inference manager. Services accept only the configured payment token.
-contract InferenceBSM is Initializable, UUPSUpgradeable, InferenceBSMBase {
+contract InferenceBSM is Initializable, UUPSUpgradeable, BlueprintServiceManagerBase {
     using EnumerableSet for EnumerableSet.AddressSet;
     error InvalidPaymentAsset(address asset);
     error InsufficientGpuCapability(uint32 required, uint32 provided);
@@ -49,7 +49,7 @@ contract InferenceBSM is Initializable, UUPSUpgradeable, InferenceBSMBase {
     /// @notice Initialize the contract (called once via proxy)
     /// @param _paymentToken The ERC20 token accepted for payment (e.g. USDC wrapped via VAnchor)
     function initialize(address _paymentToken, address registry) external initializer {
-        _bindRegistrationCore(registry);
+        _initializeBlueprintManager(registry, msg.sender);
         __UUPSUpgradeable_init();
         paymentToken = _paymentToken;
     }

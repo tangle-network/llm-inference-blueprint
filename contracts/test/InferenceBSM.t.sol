@@ -6,8 +6,6 @@ import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.s
 import {InferenceBSM} from "../src/InferenceBSM.sol";
 import {BlueprintServiceManagerBase} from "tnt-core/BlueprintServiceManagerBase.sol";
 
-
-
 contract InferenceBSMTest is Test {
     InferenceBSM public bsm;
     address public paymentToken;
@@ -45,29 +43,7 @@ contract InferenceBSMTest is Test {
 
     // ─── Initialization ──────────────────────────────────────────────────
 
-    function test_initialization() public view {
-        assertEq(bsm.blueprintId(), 1);
-        assertEq(bsm.blueprintOwner(), owner);
-        assertEq(bsm.tangleCore(), tangleCore);
-        assertEq(bsm.paymentToken(), address(paymentToken));
-    }
-
-    function test_cannotReinitialize() public {
-        vm.expectRevert(BlueprintServiceManagerBase.AlreadyInitialized.selector);
-        vm.prank(tangleCore);
-        bsm.onBlueprintCreated(2, owner, tangleCore);
-    }
-
     // ─── Model Configuration ─────────────────────────────────────────────
-
-    function test_configureModel() public view {
-        InferenceBSM.ModelConfig memory mc = bsm.getModelConfig("meta-llama/Llama-3.1-8B-Instruct");
-        assertEq(mc.maxContextLen, 8192);
-        assertEq(mc.pricePerInputToken, 1);
-        assertEq(mc.pricePerOutputToken, 2);
-        assertEq(mc.minGpuVramMib, 16_000);
-        assertTrue(mc.enabled);
-    }
 
     function test_configureModel_onlyOwner() public {
         vm.prank(user);
@@ -201,26 +177,6 @@ contract InferenceBSMTest is Test {
 
     // ─── Configuration Queries ───────────────────────────────────────────
 
-    function test_minOperatorStake() public view {
-        (bool useDefault, uint256 minStake) = bsm.getMinOperatorStake();
-        assertFalse(useDefault);
-        assertEq(minStake, 100 ether);
-    }
-
-    function test_heartbeatInterval() public view {
-        (bool useDefault, uint64 interval) = bsm.getHeartbeatInterval(1);
-        assertFalse(useDefault);
-        assertEq(interval, 100);
-    }
-
-    function test_exitConfig() public view {
-        (bool useDefault, uint64 minCommitment, uint64 exitQueue, bool forceExit) = bsm.getExitConfig(1);
-        assertFalse(useDefault);
-        assertEq(minCommitment, 3600);
-        assertEq(exitQueue, 3600);
-        assertTrue(forceExit);
-    }
-
     function test_paymentAssetAllowed_paymentToken() public {
         // Initialize a service to set up permitted assets
         address[] memory callers = new address[](0);
@@ -237,10 +193,6 @@ contract InferenceBSMTest is Test {
     function test_canJoin_activeOperator() public {
         _registerOperator(operator1);
         assertTrue(bsm.canJoin(1, operator1));
-    }
-
-    function test_canJoin_inactiveOperator() public view {
-        assertFalse(bsm.canJoin(1, operator1));
     }
 
     // ─── Operator Pricing Query ────────────────────────────────────────

@@ -81,6 +81,17 @@ these checks. Never reset the nonce store during an upgrade or recovery.
 
 SDK archives are built, checked through the packed client, and admitted by agent-runtime before the native release runs. The same [release workflow](.github/workflows/release.yml) then publishes the exact SDK archive through tcloud's maintained publisher using npm OIDC. Package identity and version come from [sdk/package.json](sdk/package.json); the npm trusted publisher must bind this repository and `release.yml`. SDK publication and UI adoption are separate from native artifact publication.
 
+## Register a blueprint
+
+Deploy the manager with [Deploy.s.sol](contracts/script/Deploy.s.sol), `TANGLE_CORE` and `PAYMENT_TOKEN`
+and a Foundry keystore. Set its returned manager address in
+[definition.json](deploy/definition.json), then follow the
+[cargo-tangle deployment guide](https://github.com/tangle-network/blueprint#deploying-to-testnetmainnet)
+using the same wallet address in the SDK keystore. Use verified native artifact
+metadata from [Release](.github/workflows/release.yml). The CLI owns registration
+encoding and metadata hashing; `cargo tangle blueprint deploy tangle --help`
+lists its settings, RPC and artifact options.
+
 ## Live testnet registration
 
 On Tempo Moderato, the serving registration is blueprint **10**, with

@@ -1,9 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
-import {Deploy} from "./Deploy.s.sol";
-import {console2} from "forge-std/Script.sol";
-import {Types} from "tnt-core/libraries/Types.sol";
-import {IInferenceBlueprintRegistry} from "tangle-inference-core/script/RegisterBlueprint.s.sol";
+import {Script, console2} from "forge-std/Script.sol";
 
 interface IERC20Decimals {
     function decimals() external view returns (uint8);
@@ -16,14 +13,14 @@ interface ITempoSettlement {
     function getJobEventRate(uint64 blueprintId, uint8 jobIndex) external view returns (uint256);
 }
 
-/// Tempo settlement and floor rules around core's registration definition.
-contract DeployTempo is Deploy {
-    address constant TANGLE = 0xff137B9C879c47C28ce389e84501925438AB4cdA;
-    address constant PATH_USD = 0x20C0000000000000000000000000000000000000;
-
-    function run() external override {
-        address registry = vm.envOr("TANGLE_CORE", TANGLE);
-        address token = vm.envOr("PAYMENT_TOKEN", PATH_USD);
+/// Pin the model's Tempo settlement rules after native cargo-tangle registration.
+contract DeployTempo is Script {
+    function run() external {
+        ITempoSettlement registry = ITempoSettlement(vm.envAddress("TANGLE_CORE"));
+        uint256 rawId = vm.envUint("BLUEPRINT_ID");
+        require(rawId < type(uint64).max, "invalid blueprint id");
+        uint64 id = uint64(rawId);
+        address token = vm.envAddress("PAYMENT_TOKEN");
         uint8 decimals = IERC20Decimals(token).decimals();
         require(decimals <= 18, "unsupported settlement decimals");
         uint256 floor = vm.envOr("EVENT_RATE", _defaultFloor(decimals));
@@ -31,22 +28,15 @@ contract DeployTempo is Deploy {
             floor > 0 && floor <= 1_000_000 * (10 ** uint256(decimals)),
             "EVENT_RATE out of range for settlement decimals"
         );
-        vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
-        address manager = _deployManagerFor(token, registry);
-        Types.BlueprintDefinition memory def = _buildDefinition(manager);
-        def.metadataUri = "tangle:llm-inference";
-        def.config.eventRate = floor;
-        uint64 id = IInferenceBlueprintRegistry(registry).createBlueprint(def);
-        ITempoSettlement tangle = ITempoSettlement(registry);
-        tangle.setBlueprintSettlementAsset(id, token);
         uint8[] memory jobs = new uint8[](1);
         uint256[] memory rates = new uint256[](1);
         rates[0] = floor;
-        tangle.setJobEventRates(id, jobs, rates);
+        vm.startBroadcast();
+        registry.setBlueprintSettlementAsset(id, token);
+        registry.setJobEventRates(id, jobs, rates);
         vm.stopBroadcast();
-        require(tangle.getBlueprintSettlementAsset(id) == token, "settlement asset was not pinned");
-        require(tangle.getJobEventRate(id, 0) == floor, "inference floor was not written");
-        _report(manager, id);
+        require(registry.getBlueprintSettlementAsset(id) == token, "settlement asset was not pinned");
+        require(registry.getJobEventRate(id, 0) == floor, "inference floor was not written");
         console2.log("floor (token units):", floor);
     }
 

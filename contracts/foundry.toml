@@ -21,6 +21,6 @@ tab_width = 4
 [dependencies]
 forge-std = "1.9.4"
 "@openzeppelin-contracts" = "5.1.0"
-tnt-core = "0.13.0"
+tnt-core = "0.20.0"
 "@openzeppelin-contracts-upgradeable" = "5.1.0"
 shielded-payment-gateway = { version = "0.1.0", git = "https://github.com/tangle-network/shielded-payment-gateway.git", rev = "65f6b4064503e79fcc750799bc3f69a4e1f6c4ad" }
