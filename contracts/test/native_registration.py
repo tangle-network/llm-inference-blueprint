@@ -60,6 +60,7 @@ def read(address, signature):
     return run(['cast', 'call', address, signature, '--rpc-url', url]).stdout.strip()
 
 
+run(['forge', 'soldeer', 'update', '--config-location', 'foundry', '--quiet'])
 with tempfile.TemporaryDirectory(prefix='native-registration-') as temp:
     temp = Path(temp)
     with socket.socket() as reservation:
@@ -116,7 +117,7 @@ with tempfile.TemporaryDirectory(prefix='native-registration-') as temp:
         foreign = run(args + ['--keystore-path', str(temp / 'attacker')], check=False)
         assert foreign.returncode != 0, 'foreign registry relay acquired the manager'
         assert int(read(registry, 'blueprintCount()(uint64)').split()[0]) == 0
-        accepted = run(args + ['--keystore-path', str(temp / 'creator')])
+        run(args + ['--keystore-path', str(temp / 'creator')])
         assert int(read(registry, 'blueprintCount()(uint64)').split()[0]) == 1
         assert int(read(manager, 'blueprintId()(uint64)').split()[0]) == 0
         assert read(manager, 'blueprintOwner()(address)').lower() == creator.lower()
@@ -130,7 +131,8 @@ with tempfile.TemporaryDirectory(prefix='native-registration-') as temp:
         assert configured['vllm']['model'] in definition['metadata']['description']
         metadata = run(['cast', 'call', registry, 'blueprintMetadata(uint64)((' + ','.join(['string'] * 9) + '),string,bytes32)',
                         '0', '--rpc-url', url, '--json']).stdout
-        decoded = json.loads(metadata)['data'][0]
+        decoded = json.loads(metadata)
+        decoded = (decoded['data'] if isinstance(decoded, dict) else decoded)[0]
         assert decoded[-1] == profile, 'real GPU requirement did not reach its chain metadata field'
         assert bytes.fromhex(binary_sha) in wire, 'registered binary digest changed'
         repeated = run(args + ['--keystore-path', str(temp / 'creator')], check=False)
