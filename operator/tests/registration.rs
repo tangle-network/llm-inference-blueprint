@@ -29,6 +29,21 @@ async fn registration_preserves_definition_gpu_requirement() -> anyhow::Result<(
     let registry = Registry::new(chain.tangle_contract, &provider);
     let id = registry.blueprintCount().call().await?;
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    if !root
+        .join("contracts/dependencies/tnt-core-0.13.0/src/Tangle.sol")
+        .exists()
+    {
+        let install = tokio::process::Command::new("forge")
+            .args(["soldeer", "install"])
+            .current_dir(root.join("contracts"))
+            .output()
+            .await?;
+        anyhow::ensure!(
+            install.status.success(),
+            "contract dependency setup failed: {}",
+            String::from_utf8_lossy(&install.stderr)
+        );
+    }
     let output = tokio::process::Command::new("bash")
         .arg(root.join("deploy/register-blueprint.sh"))
         .current_dir(root)
