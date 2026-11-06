@@ -129,11 +129,12 @@ with tempfile.TemporaryDirectory(prefix='native-registration-') as temp:
         assert declared['min_vram_gb'] == (configured['gpu']['min_vram_mib'] * 1048576 + 999999999) // 1000000000
         assert declared['min_count'] == configured['gpu']['expected_gpu_count']
         assert configured['vllm']['model'] in definition['metadata']['description']
-        metadata = run(['cast', 'call', registry, 'blueprintMetadata(uint64)((' + ','.join(['string'] * 9) + '),string,bytes32)',
-                        '0', '--rpc-url', url, '--json']).stdout
+        metadata_wire = run(['cast', 'call', registry, 'blueprintMetadata(uint64)', '0', '--rpc-url', url]).stdout.strip()
+        metadata = run(['cast', 'decode-abi', '--json', 'blueprintMetadata(uint64)((' + ','.join(['string'] * 9) + '),string,bytes32)', metadata_wire]).stdout
         decoded = json.loads(metadata)
         decoded = (decoded['data'] if isinstance(decoded, dict) else decoded)[0]
-        assert decoded[-1] == profile, 'real GPU requirement did not reach its chain metadata field'
+        a.output.with_suffix('.metadata.json').write_text(json.dumps({'wire': metadata_wire, 'decoded': decoded}, indent=2) + '\n')
+        assert decoded[-1] == profile, (decoded, profile)
         assert bytes.fromhex(binary_sha) in wire, 'registered binary digest changed'
         repeated = run(args + ['--keystore-path', str(temp / 'creator')], check=False)
         assert repeated.returncode != 0, 'manager accepted a second blueprint binding'
