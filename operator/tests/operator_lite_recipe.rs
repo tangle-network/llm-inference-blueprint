@@ -67,10 +67,12 @@ while not os.path.exists(sys.argv[3]) and os.getppid() == parent: server.handle_
     config["billing"]["payment_rails"] = json!({"shielded": false, "direct": false});
     let path = dir.path().join("config.json");
     std::fs::write(&path, serde_json::to_vec(&config)?)?;
+    let log_path = dir.path().join("operator.log");
+    let log = std::fs::File::create(&log_path)?;
     let mut operator = tokio::process::Command::new(env!("CARGO_BIN_EXE_operator-lite"))
         .arg(path)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stdout(Stdio::from(log.try_clone()?))
+        .stderr(Stdio::from(log))
         .kill_on_drop(true)
         .spawn()?;
     let client = reqwest::Client::builder()
@@ -101,8 +103,11 @@ while not os.path.exists(sys.argv[3]) and os.getppid() == parent: server.handle_
         );
         std::fs::write(&ready_path, b"ready")?;
         loop {
-            if operator.try_wait()?.is_some() {
-                anyhow::bail!("operator-lite exited before readiness");
+            if let Some(status) = operator.try_wait()? {
+                let log = std::fs::read_to_string(&log_path)?;
+                let reason = if log.contains("stack overflow") { "stack overflow" }
+                    else { log.lines().find(|line| line.starts_with("Error:")).unwrap_or("no error diagnostic") };
+                anyhow::bail!("operator-lite exited before readiness ({status}): {reason}");
             }
             if client
                 .get(format!("http://127.0.0.1:{operator_port}/health"))
