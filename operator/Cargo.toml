@@ -75,7 +75,3 @@ tempfile = "3"
 [[test]]
 name = "harness_e2e"
 required-features = ["chain-tests"]
-
-[[test]]
-name = "registration"
-required-features = ["chain-tests"]
