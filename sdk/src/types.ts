@@ -1,4 +1,5 @@
-import type { Address, Hex, TypedDataDomain } from "viem";
+import type { Address, Hex } from "viem";
+import type { createLocalSpendSigner } from "./spendAuth";
 
 /** Chat message in OpenAI format */
 export interface ChatMessage {
@@ -116,38 +117,7 @@ export interface CreditAccount {
   nonce: bigint;
 }
 
-/**
- * EIP-712 typed-data bundle for a SpendAuthorization, in the shape viem's
- * `signTypedData` (and wagmi's, and the Tangle parent bridge's) expect. The
- * SDK builds this; any signer can fulfill it.
- */
-export interface SpendAuthTypedData {
-  domain: TypedDataDomain;
-  types: {
-    SpendAuthorization: { name: string; type: string }[];
-  };
-  primaryType: "SpendAuthorization";
-  message: {
-    commitment: Hex;
-    serviceId: bigint;
-    jobIndex: number;
-    amount: bigint;
-    operator: Address;
-    nonce: bigint;
-    expiry: bigint;
-  };
-}
-
-/**
- * Pluggable SpendAuth signer. `account` is the address that must be recovered
- * on-chain (i.e. the credit account's `spendingKey`); `signTypedData` produces
- * the EIP-712 signature. A local ephemeral key, wagmi, or the Tangle parent
- * bridge can all implement this.
- */
-export interface SpendAuthSigner {
-  account: Address;
-  signTypedData: (typedData: SpendAuthTypedData) => Promise<Hex>;
-}
+export type SpendAuthSigner = ReturnType<typeof createLocalSpendSigner>;
 
 /** An unsigned EVM transaction request (funding flow). */
 export interface TxRequest {

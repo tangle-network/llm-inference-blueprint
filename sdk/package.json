@@ -1,6 +1,6 @@
 {
   "name": "@tangle-network/llm-inference-sdk",
-  "version": "0.2.0",
+  "version": "1.0.0",
   "description": "Client SDK for the Tangle vLLM inference blueprint with ShieldedCredits billing (viem)",
   "type": "module",
   "main": "dist/index.js",
@@ -37,16 +37,11 @@
     "viem": "2.49.0",
     "vitest": "^5.0.5"
   },
-  "pnpm": {
-    "overrides": {
-      "esbuild": "0.28.2",
-      "postcss": "8.5.31",
-      "vite": "6.4.5",
-      "ws": "8.22.0"
-    }
-  },
   "files": [
     "dist/"
   ],
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "@tangle-network/tcloud": "^1.0.4"
+  }
 }

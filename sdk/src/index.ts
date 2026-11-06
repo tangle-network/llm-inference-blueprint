@@ -1,11 +1,5 @@
 export * from "./types";
 export {
-  SPEND_AUTHORIZATION_TYPE,
-  SPEND_AUTH_DOMAIN_NAME,
-  SPEND_AUTH_DOMAIN_VERSION,
-  buildSpendAuthTypedData,
-} from "./eip712";
-export {
   createLocalSpendSigner,
   signSpendAuth,
   toSpendAuthPayload,

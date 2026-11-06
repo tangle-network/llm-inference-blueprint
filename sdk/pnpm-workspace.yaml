@@ -1,0 +1,5 @@
+overrides:
+  esbuild: 0.28.2
+  postcss: 8.5.31
+  vite: 6.4.5
+  ws: 8.22.0
