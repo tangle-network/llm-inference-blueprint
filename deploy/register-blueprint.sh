@@ -1,40 +1,6 @@
 #!/usr/bin/env bash
 # Register the vLLM LLM-inference blueprint on Tangle.
-#
-# Single-shot flow: deploys InferenceBSM (impl + UUPS proxy + initialize)
-# AND calls Tangle.createBlueprint in the same broadcast via
-# `contracts/script/Deploy.s.sol`. This replaces the prior
-# hand-written cast invocations.
-#
-# Prerequisites:
-#   - forge installed
-#   - Deployer wallet funded on the target network
-#
-# Usage (Base Sepolia, against the already-deployed Tangle protocol):
-#
-#   export PRIVATE_KEY=0x...
-#   export RPC_URL=https://sepolia.base.org
-#   export TANGLE_CORE=0xC9b0716a187072be0f38A5D972392C6479b9Cfe3
-#   export PAYMENT_TOKEN=0x036CbD53842c5426634e7929541eC2318f3dCF7e  # USDC sepolia
-#   ./deploy/register-blueprint.sh
-#
-# Local anvil (LocalTestnet snapshot):
-#
-#   export RPC_URL=http://127.0.0.1:8545
-#   export BLUEPRINT_BINARY=target/debug/llm-operator
-#   ./deploy/register-blueprint.sh   # requires PRIVATE_KEY and the local TANGLE_CORE
-#
-# Optional overrides:
-#   MODEL              vLLM model to advertise (default: meta-llama/Llama-3.1-8B-Instruct)
-#   GPU_COUNT          GPUs the operator exposes (default: 1)
-#   TOTAL_VRAM         Total VRAM in MiB (default: 48000)
-#   GPU_MODEL          GPU model string (default: NVIDIA A100)
-#   ENDPOINT           Operator HTTP endpoint (default: https://your-operator.example.com)
-#
-# Outputs (parsed by deployment scripts, do not change without coordinating):
-#   DEPLOY_INFERENCE_BSM_IMPL=<address>
-#   DEPLOY_INFERENCE_BSM_PROXY=<address>
-#   DEPLOY_INFERENCE_BLUEPRINT_ID=<u64>
+# Release definitions and local Anvil inputs are documented in README.md.
 
 set -euo pipefail
 

@@ -54,8 +54,9 @@ Set the required SDK RPC, blueprint, service and contract variables listed in
 [docker-compose.yml](docker-compose.yml), provision the operator keystore in its
 state volume (`--keystore-uri /home/operator/state/keystore`), then run
 `docker compose up --build operator` with the NVIDIA container runtime.
-`llm-operator` manages the engine; `operator-lite` connects to an existing
-OpenAI-compatible backend such as the GTR Ollama shim.
+`operator-lite` attaches to an existing OpenAI-compatible backend such as the GTR Ollama shim by default. To supervise SGLang, set `vllm.engine` to `sglang` and `vllm.external` to `false`. A derivative model sets `vllm.base_family` and `vllm.model`; select its arm, GPU class and tensor parallelism from the [core catalog](https://github.com/tangle-network/tangle-inference-core/blob/master/engine-profiles.json) at the commit pinned in `operator/Cargo.toml`. On-chain admission and pricing remain model rules in the BSM.
+
+`operator-lite` takes an optional configuration file as its first argument. Without one it reads `VLLM_OP_` environment variables, with `__` between nested fields, such as `VLLM_OP_SERVER__PORT`.
 
 Tagged releases publish both Linux binaries, archive checksums and extracted
 binary checksums through [Release](.github/workflows/release.yml).
