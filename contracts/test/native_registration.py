@@ -143,9 +143,9 @@ with tempfile.TemporaryDirectory(prefix='native-registration-') as temp:
         assert configured['vllm']['model'] in definition['metadata']['description']
         model = configured['vllm']['model']
         key = run(['cast', 'keccak', model]).stdout.strip()
-        stored = run(['cast', 'call', manager, 'modelConfigs(bytes32)(uint32,uint64,uint64,uint32,bool)', key, '--rpc-url', url]).stdout.split()
-        assert stored == [str(configured['vllm']['max_model_len']), str(configured['vllm']['price_per_input_token']),
-                          str(configured['vllm']['price_per_output_token']), str(configured['gpu']['min_vram_mib']), 'true'], stored
+        stored = run(['cast', 'call', manager, 'modelConfigs(bytes32)(uint32,uint64,uint64,uint32,bool)', key, '--rpc-url', url, '--json']).stdout
+        assert json.loads(stored) == [str(configured['vllm']['max_model_len']), str(configured['vllm']['price_per_input_token']),
+                                      str(configured['vllm']['price_per_output_token']), str(configured['gpu']['min_vram_mib']), True], stored
         metadata_wire = run(['cast', 'call', registry, 'blueprintMetadata(uint64)', '0', '--rpc-url', url]).stdout.strip()
         metadata = run(['cast', 'decode-abi', '--json', 'blueprintMetadata(uint64)((' + ','.join(['string'] * 9) + '),string,bytes32)', metadata_wire]).stdout
         decoded = json.loads(metadata)
