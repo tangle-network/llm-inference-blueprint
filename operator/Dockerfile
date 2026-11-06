@@ -20,8 +20,8 @@ COPY --from=operator-lite-builder /out/operator-lite /usr/local/bin/operator-lit
 RUN test -n "$VCS_REF" && test -n "$CORE_REVISION" && groupadd -f operator && useradd -m -g operator -s /bin/bash operator && install -d -o operator -g operator /home/operator/.cache/huggingface /home/operator/state
 USER operator
 WORKDIR /home/operator
-EXPOSE 8080 8000
-HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD curl -f http://localhost:8080/health || exit 1
+EXPOSE 8080
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD ["/bin/bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8080"]
 ENV HF_HOME=/home/operator/.cache/huggingface VLLM_OP_BILLING__NONCE_STORE_PATH=/home/operator/state/nonces.json
 ENTRYPOINT ["/usr/local/bin/operator-lite"]
 CMD []
@@ -32,8 +32,8 @@ RUN groupadd -f operator && useradd -m -g operator -s /bin/bash operator
 USER operator
 WORKDIR /home/operator
 RUN mkdir -p /home/operator/.cache/huggingface /home/operator/state
-EXPOSE 8080 8000
-HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD curl -f http://localhost:8080/health || exit 1
+EXPOSE 8080
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD ["/bin/bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8080"]
 ENTRYPOINT ["llm-operator"]
 ENV VLLM_OP_CONFIG=/home/operator/config.json HF_HOME=/home/operator/.cache/huggingface DATA_DIR=/home/operator/state KEYSTORE_URI=/home/operator/state/keystore PROTOCOL=tangle VLLM_OP_BILLING__NONCE_STORE_PATH=/home/operator/state/nonces.json
 CMD ["run"]
