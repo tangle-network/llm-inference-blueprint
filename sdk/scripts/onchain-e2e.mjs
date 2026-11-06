@@ -1,5 +1,5 @@
 // On-chain end-to-end proof for the viem SDK against a live ShieldedCredits
-// deployment (anvil via scripts/deploy-local.sh). It signs a SpendAuthorization
+// deployment prepared through its maintained deploy path. It signs a SpendAuthorization
 // with the SDK and submits `authorizeSpend` on-chain — so the contract's own
 // ECDSA.recover must accept the SDK's EIP-712 signature, not just our unit
 // reconstruction. Reads ../../.env.local for addresses + keys.
