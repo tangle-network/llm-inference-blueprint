@@ -612,3 +612,46 @@ async fn test_openai_controls_and_model_metadata_through_http() {
     let _ = shutdown.send(true);
     handle.await.unwrap();
 }
+
+#[tokio::test]
+async fn test_cold_backend_returns_retryable_503_without_generation() {
+    let peer = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/health"))
+        .respond_with(ResponseTemplate::new(503))
+        .mount(&peer)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id":"ready","object":"chat.completion","created":1,"model":"test-model",
+            "choices":[{"index":0,"message":{"role":"assistant","content":"READY"},"finish_reason":"stop"}],
+            "usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}
+        })))
+        .mount(&peer)
+        .await;
+    let (port, shutdown, handle) = start_test_server(peer.address().port()).await;
+    let began = std::time::Instant::now();
+    let response = reqwest::Client::new()
+        .post(format!("http://127.0.0.1:{port}/v1/chat/completions"))
+        .json(&serde_json::json!({"model":"test-model","messages":[{"role":"user","content":"Reply READY."}]}))
+        .send().await.unwrap();
+    assert_eq!(response.status(), 503);
+    assert!(began.elapsed() < std::time::Duration::from_millis(12500));
+    assert!(
+        response.headers()["retry-after"]
+            .to_str()
+            .unwrap()
+            .parse::<u32>()
+            .unwrap()
+            > 0
+    );
+    assert!(peer
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .all(|request| request.method != "POST"));
+    let _ = shutdown.send(true);
+    handle.await.unwrap();
+}
