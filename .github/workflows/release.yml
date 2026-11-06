@@ -10,8 +10,6 @@ on:
 permissions:
   contents: write
   packages: write
-env:
-  TARGET: x86_64-unknown-linux-gnu
 jobs:
   release:
     runs-on: ubuntu-latest
@@ -66,7 +64,8 @@ jobs:
         run: |
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 ||
             gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "$TAG" --generate-notes
-          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | grep -qx blueprint-definition.json; then
+          ASSETS=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')
+          if grep -qx blueprint-definition.json <<< "$ASSETS"; then
             gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern blueprint-definition.json --dir "$RUNNER_TEMP/prior-release"
             cmp "$RUNNER_TEMP/prior-release/blueprint-definition.json" release/blueprint-definition.json
           fi
