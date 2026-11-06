@@ -37,7 +37,7 @@ Single model per instance. Dependency versions are owned by [operator/Cargo.toml
 
 Merge `origin/main` before qualifying source changes. Run the affected integration surface before merge through the admitted launcher. The comprehensive reference below retains the former branch checks; workflow and documentation-only changes use YAML, content, link and diff checks.
 
-HTTP-only checks use `cargo test --no-default-features --test server_tests`. The comprehensive gate enables `--all-features`, including `chain-tests` for the actual Anvil registration and job flows.
+HTTP-only checks use `cargo test --no-default-features --test server_tests`. The comprehensive gate enables `--all-features`, including `chain-tests` for the actual Anvil job flow.
 
 Provision Rust with rustfmt/clippy, protoc, Foundry and cargo-audit through the maintained host toolchain. The launcher does not provision these Rust/contract prerequisites.
 
