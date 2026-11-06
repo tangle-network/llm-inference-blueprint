@@ -9,7 +9,7 @@
 // Exits non-zero on any assertion failure.
 
 import { readFileSync } from 'node:fs'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { dirname, resolve } from 'node:path'
 import { spawn } from 'node:child_process'
 import { createInterface } from 'node:readline'
@@ -22,14 +22,16 @@ import {
 } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 
-import {
+const args = process.argv.slice(2)
+if (args.length && (args[0] !== '--http-peer' || args.length > 2)) throw new Error('Expected --http-peer [SDK module] or no arguments')
+const {
   createLocalSpendSigner,
   createInferenceClient,
   generateCreditIdentity,
   signSpendAuth,
   readCreditAccount,
   SHIELDED_CREDITS_ABI,
-} from '../dist/index.js'
+} = await import(args[1] ? pathToFileURL(resolve(args[1])).href : new URL('../dist/index.js', import.meta.url).href)
 
 const here = dirname(fileURLToPath(import.meta.url))
 const envPath = resolve(here, '../../.env.local')
@@ -247,8 +249,6 @@ async function proveHttpPeer() {
   }
 }
 
-const args = process.argv.slice(2)
-if (args.length && (args.length !== 1 || args[0] !== '--http-peer')) throw new Error('Expected --http-peer or no arguments')
 
 ;(args.length ? proveHttpPeer() : main()).catch((err) => {
   console.error('[onchain-e2e] error:', err)

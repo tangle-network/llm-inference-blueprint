@@ -15,3 +15,5 @@ contracts/dependencies/
 
 # operator runtime nonce store
 data/
+
+contracts/broadcast/**/run-latest.json
