@@ -31,6 +31,13 @@ port = int(sys.argv[sys.argv.index('--port') + 1])
 class Health(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200); self.end_headers(); self.wfile.write(b'{}')
+    def do_POST(self):
+        self.rfile.read(int(self.headers['Content-Length']))
+        response={'id':'core-endpoint','object':'chat.completion','created':1,'model':'example/GLM-derivative',
+          'choices':[{'index':0,'message':{'role':'assistant','content':'core endpoint'},'finish_reason':'stop'}],
+          'usage':{'prompt_tokens':1,'completion_tokens':1,'total_tokens':2,'prompt_tokens_details':{'cached_tokens':0}}}
+        self.send_response(200); self.send_header('Content-Type','application/json'); self.end_headers()
+        self.wfile.write(json.dumps(response).encode())
     def log_message(self, *args): pass
 server = HTTPServer(('127.0.0.1', port), Health)
 server.timeout = 0.05
@@ -50,6 +57,7 @@ while not os.path.exists(sys.argv[3]) and os.getppid() == parent: server.handle_
         ready_path.display(),
         stop_path.display()
     ));
+    config["vllm"]["host"] = json!("127.0.0.2");
     config["vllm"]["port"] = json!(engine_port);
     config["vllm"]["startup_timeout_secs"] = json!(10);
     config["vllm"]["external"] = json!(false);
@@ -102,6 +110,11 @@ while not os.path.exists(sys.argv[3]) and os.getppid() == parent: server.handle_
                 .await
                 .is_ok_and(|response| response.status().is_success())
             {
+                let response = client.post(format!("http://127.0.0.1:{operator_port}/v1/chat/completions"))
+                    .json(&json!({"model":"example/GLM-derivative","messages":[{"role":"user","content":"Hello"}]}))
+                    .send().await?;
+                anyhow::ensure!(response.status().is_success(), "chat did not reach the effective core endpoint: {}", response.status());
+                assert_eq!(response.json::<Value>().await?["id"], "core-endpoint");
                 return Ok::<_, anyhow::Error>(());
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
