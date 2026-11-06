@@ -16,12 +16,13 @@ async fn operator_lite_launches_inherited_sglang_recipe() -> anyhow::Result<()> 
     let engine_port = free_port();
     let operator_port = free_port();
     let argv_path = dir.path().join("argv.json");
+    let router_argv_path = dir.path().join("router-argv.json");
     let ready_path = dir.path().join("ready");
     let stop_path = dir.path().join("stop");
     let peer = dir.path().join("engine.py");
     std::fs::write(
         &peer,
-        r#"import sys, json, os, time
+        r#"import sys, json, os, time, http.client, urllib.parse
 from http.server import HTTPServer, BaseHTTPRequestHandler
 parent = os.getppid()
 with open(sys.argv[1], 'w') as output: json.dump(sys.argv[4:], output)
@@ -32,7 +33,14 @@ class Health(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200); self.end_headers(); self.wfile.write(b'{}')
     def do_POST(self):
-        self.rfile.read(int(self.headers['Content-Length']))
+        body = self.rfile.read(int(self.headers['Content-Length']))
+        if '--worker-urls' in sys.argv:
+            worker = urllib.parse.urlsplit(sys.argv[sys.argv.index('--worker-urls') + 1])
+            connection = http.client.HTTPConnection(worker.hostname, worker.port)
+            connection.request('POST', self.path, body, {'Content-Type':'application/json'})
+            response = connection.getresponse()
+            self.send_response(response.status); self.send_header('Content-Type','application/json'); self.end_headers()
+            self.wfile.write(response.read()); connection.close(); return
         response={'id':'core-endpoint','object':'chat.completion','created':1,'model':'example/GLM-derivative',
           'choices':[{'index':0,'message':{'role':'assistant','content':'core endpoint'},'finish_reason':'stop'}],
           'usage':{'prompt_tokens':1,'completion_tokens':1,'total_tokens':2,'prompt_tokens_details':{'cached_tokens':0}}}
@@ -54,6 +62,13 @@ while not os.path.exists(sys.argv[3]) and os.getppid() == parent: server.handle_
         "python3 {} {} {} {}",
         peer.display(),
         argv_path.display(),
+        ready_path.display(),
+        stop_path.display()
+    ));
+    config["vllm"]["router_command"] = json!(format!(
+        "python3 {} {} {} {}",
+        peer.display(),
+        router_argv_path.display(),
         ready_path.display(),
         stop_path.display()
     ));
