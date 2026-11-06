@@ -889,9 +889,9 @@ dependencies = [
 
 [[package]]
 name = "alloy-signer-local"
-version = "2.5.0"
+version = "2.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d6909c09d586c7b55eced688754d57dde8a6bcbae2b83e69a9b9250e74cfd79e"
+checksum = "c880813cd26bd1ddf8c2236e31295896efd1fcc5cc761d8894ae894503aeea53"
 dependencies = [
  "alloy-consensus 2.5.0",
  "alloy-network 2.5.0",
@@ -2686,7 +2686,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bdaab0be1bacbd6643d65eca442b0b61418c18263bbdb52f5eb926a4aaafe73c"
 dependencies = [
  "alloy-primitives",
- "alloy-signer-local 2.5.0",
+ "alloy-signer-local 2.1.1",
  "blueprint-crypto-core 0.2.0-alpha.8",
  "blueprint-std 0.2.0-alpha.8",
  "hex",
