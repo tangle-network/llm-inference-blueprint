@@ -188,9 +188,6 @@ pub async fn run_inference(
 /// Runs the vLLM subprocess and the OpenAI-compatible HTTP proxy as a
 /// [`BackgroundService`]. This starts before the BlueprintRunner begins
 /// polling for on-chain jobs.
-///
-/// Includes a watchdog loop that monitors the vLLM process and respawns
-/// it if it exits unexpectedly.
 #[derive(Clone)]
 pub struct InferenceServer {
     pub config: Arc<OperatorConfig>,
@@ -202,10 +199,6 @@ impl BackgroundService for InferenceServer {
         let config = self.config.clone();
 
         tokio::spawn(async move {
-            // 1. Start the inference backend: either spawn a vLLM subprocess,
-            //    or (when configured external) connect to an already-running
-            //    OpenAI-compatible server at host:port (cli-bridge, llama.cpp,
-            //    …) — the latter needs no GPU and is used for local e2e.
             let vllm_handle = if config.vllm.external {
                 tracing::info!(
                     host = %config.vllm.host,

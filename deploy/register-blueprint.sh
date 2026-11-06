@@ -97,7 +97,3 @@ REG_INPUTS=$(cast abi-encode \
 echo "Operator registration inputs (use these to register an operator):"
 echo "  $REG_INPUTS"
 echo ""
-echo "To register an operator now:"
-echo "  cast send ${TANGLE_CORE:-<TANGLE_CORE>} \\"
-echo "    'registerOperator(uint64,bytes)' $BLUEPRINT_ID $REG_INPUTS \\"
-echo "    --rpc-url $RPC_URL --private-key \$OPERATOR_KEY"

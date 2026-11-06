@@ -32,7 +32,7 @@ contract DeployTempo is Deploy {
             "EVENT_RATE out of range for settlement decimals"
         );
         vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
-        address manager = _deployManagerFor(token);
+        address manager = _deployManagerFor(token, registry);
         Types.BlueprintDefinition memory def = _buildDefinition(manager);
         def.metadataUri = "tangle:llm-inference";
         def.config.eventRate = floor;
