@@ -31,11 +31,14 @@ def run(argv, *, env=None, check=True):
     return r
 
 
-def rpc(method, params):
+def rpc(method, params, expect_error=False):
     data = json.dumps({'jsonrpc': '2.0', 'id': 1, 'method': method, 'params': params}).encode()
     request = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'})
     with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(request, timeout=5) as response:
         value = json.load(response)
+    if expect_error:
+        assert 'error' in value, 'RPC still signs for the fixture account'
+        return value['error']
     assert 'error' not in value, value
     return value['result']
 
@@ -50,7 +53,6 @@ def keypair(root):
     digest = run(['cast', 'keccak', '0x' + uncompressed[1:].hex()]).stdout.strip()
     address = '0x' + digest[-40:]
     rpc('anvil_setBalance', [address, hex(100 * 10**18)])
-    rpc('anvil_impersonateAccount', [address])
     return address
 
 
@@ -79,6 +81,7 @@ with tempfile.TemporaryDirectory(prefix='native-registration-') as temp:
                 time.sleep(.05)
         creator = keypair(temp / 'creator')
         attacker = keypair(temp / 'attacker')
+        rpc('anvil_impersonateAccount', [creator])
         env = os.environ.copy()
         env.pop('PRIVATE_KEY', None)
         env.update(NATIVE_TEST_OWNER=creator)
@@ -89,6 +92,9 @@ with tempfile.TemporaryDirectory(prefix='native-registration-') as temp:
         result = run(['forge', 'script', 'script/Deploy.s.sol:Deploy', '--rpc-url', url, '--unlocked',
                       '--sender', creator, '--broadcast'], env=env)
         manager = re.search(r'DEPLOY_INFERENCE_BSM_PROXY=(0x[0-9a-fA-F]{40})', result.stdout)[1]
+        for address in [creator, attacker]:
+            rpc('anvil_stopImpersonatingAccount', [address])
+            rpc('eth_sendTransaction', [{'from': address, 'to': address, 'value': '0x0', 'gas': '0x5208'}], expect_error=True)
         assert read(manager, 'blueprintOwner()(address)').lower() == creator.lower()
         assert read(manager, 'tangleCore()(address)').lower() == registry.lower()
         assert int(read(manager, 'blueprintId()(uint64)').split()[0]) == 2**64 - 1
@@ -137,7 +143,7 @@ with tempfile.TemporaryDirectory(prefix='native-registration-') as temp:
                   'binary_sha256': binary_sha, 'binary_bytes': binary.stat().st_size,
                   'binary_path': str(binary), 'cli_version': run([a.cli, '--version']).stdout.strip(),
                   'cli_sha256': hashlib.sha256(Path(shutil.which(a.cli)).read_bytes()).hexdigest(),
-                  'foreign_relay_refused': True, 'repeat_refused': True,
+                  'foreign_relay_refused': True, 'repeat_refused': True, 'unsigned_rpc_send_refused_for_both': True,
                   'boundary': 'Actual released native CLI signing from SDK keystore, actual model Forge deployment and Tangle registry on local Anvil'}
         a.output.write_text(json.dumps(report, indent=2) + '\n')
         print(json.dumps(report))

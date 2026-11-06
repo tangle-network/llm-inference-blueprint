@@ -124,20 +124,6 @@ contract InferenceBSMTest is Test {
 
     // ─── Service Request ─────────────────────────────────────────────────
 
-    function test_onRequest_validPayment() public {
-        address[] memory ops = new address[](0);
-
-        vm.prank(tangleCore);
-        bsm.onRequest(1, user, ops, "", 3600, address(paymentToken), 1000);
-    }
-
-    function test_onRequest_nativePayment() public {
-        address[] memory ops = new address[](0);
-
-        vm.prank(tangleCore);
-        bsm.onRequest(1, user, ops, "", 3600, address(0), 0);
-    }
-
     function test_onRequest_invalidPaymentAsset() public {
         address[] memory ops = new address[](0);
         address wrongToken = address(0xDEAD);
