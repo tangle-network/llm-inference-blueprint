@@ -56,6 +56,11 @@ def keypair(root):
     return address
 
 
+def revert(error, *addresses):
+    """Hex of the manager's custom error as the registry relays it inside its own revert."""
+    return run(['cast', 'sig', error]).stdout.strip()[2:] + ''.join(x[2:].lower().rjust(64, '0') for x in addresses)
+
+
 def read(address, signature):
     return run(['cast', 'call', address, signature, '--rpc-url', url]).stdout.strip()
 
@@ -115,7 +120,8 @@ with tempfile.TemporaryDirectory(prefix='native-registration-') as temp:
                 '--tangle-contract', registry, '--staking-contract', registry, '--status-registry-contract', registry]
         # The public registry relays the attacker's own signed request to the real manager.
         foreign = run(args + ['--keystore-path', str(temp / 'attacker')], check=False)
-        assert foreign.returncode != 0 and 'OnlyBlueprintOwnerAllowed' in foreign.stdout + foreign.stderr, foreign
+        assert foreign.returncode != 0 and revert('OnlyBlueprintOwnerAllowed(address,address)', attacker, creator) in (
+            foreign.stdout + foreign.stderr).lower(), foreign
         assert int(read(registry, 'blueprintCount()(uint64)').split()[0]) == 0
         run(args + ['--keystore-path', str(temp / 'creator')])
         assert int(read(registry, 'blueprintCount()(uint64)').split()[0]) == 1
@@ -149,7 +155,7 @@ with tempfile.TemporaryDirectory(prefix='native-registration-') as temp:
         assert observed_profile == json.loads(profile), (observed_profile, profile)
         assert bytes.fromhex(binary_sha) in wire, 'registered binary digest changed'
         repeated = run(args + ['--keystore-path', str(temp / 'creator')], check=False)
-        assert repeated.returncode != 0 and 'AlreadyInitialized' in repeated.stdout + repeated.stderr, repeated
+        assert repeated.returncode != 0 and revert('AlreadyInitialized()') in (repeated.stdout + repeated.stderr).lower(), repeated
         assert int(read(registry, 'blueprintCount()(uint64)').split()[0]) == 1
         report = {'source': run(['git', 'rev-parse', 'HEAD']).stdout.strip(), 'registry': registry,
                   'manager': manager, 'creator': creator, 'blueprint_id': 0, 'profiling_data': observed_profile,
