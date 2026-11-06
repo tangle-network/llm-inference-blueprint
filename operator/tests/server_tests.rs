@@ -11,7 +11,6 @@ use llm_inference::config::{
     VllmConfig,
 };
 use llm_inference::server::VllmBackend;
-use llm_inference::{AppStateBuilder, BillingClient, NonceStore};
 use tangle_inference_core::PaymentRails;
 
 fn test_config(vllm_port: u16) -> OperatorConfig {
@@ -89,70 +88,51 @@ fn free_port() -> u16 {
 }
 
 async fn build_test_state(config: Arc<OperatorConfig>) -> llm_inference::AppState {
-    let vllm = Arc::new(llm_inference::chat::ChatClient::connect(config.clone()).unwrap());
-    let billing = Arc::new(BillingClient::new(&config.tangle, &config.billing).unwrap());
-    let operator_address = billing.operator_address();
-    let nonce_store = Arc::new(NonceStore::load(None));
-    let backend = VllmBackend::new(config.clone(), vllm);
-
-    AppStateBuilder::new()
-        .billing(billing)
-        .nonce_store(nonce_store)
-        .server_config(Arc::new(config.server.clone()))
-        .billing_config(Arc::new(config.billing.clone()))
-        .tangle_config(Arc::new(config.tangle.clone()))
-        .operator_address(operator_address)
-        .max_concurrent(64)
-        .backend(backend)
-        .build()
-        .unwrap()
+    let engine = Arc::new(llm_inference::chat::ChatClient::connect(config.clone()).unwrap());
+    llm_inference::AppState::from_config(
+        &config.tangle,
+        &config.server,
+        &config.billing,
+        64,
+        VllmBackend::new(config.clone(), engine),
+    )
+    .unwrap()
 }
 
-/// Returns (server_port, _guard) — caller must hold _guard to keep the server alive.
 async fn start_test_server(
     vllm_port: u16,
 ) -> (u16, tokio::sync::watch::Sender<bool>, JoinHandle<()>) {
-    let server_port = free_port();
-    let mut config = test_config(vllm_port);
-    config.server.port = server_port;
-    config.server.host = "127.0.0.1".into();
-    let config = Arc::new(config);
-
-    let state = build_test_state(config).await;
-    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-
-    let handle = llm_inference::server::start(state, shutdown_rx)
-        .await
-        .unwrap();
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    (server_port, shutdown_tx, handle)
+    start_configured_server(test_config(vllm_port)).await
 }
 
-/// Start a test server with billing_required = true.
-/// Returns (server_port, _guard) — caller must hold _guard to keep the server alive.
 async fn start_billing_required_server(
     vllm_port: u16,
 ) -> (u16, tokio::sync::watch::Sender<bool>, JoinHandle<()>) {
-    let server_port = free_port();
     let mut config = test_config(vllm_port);
-    config.server.port = server_port;
-    config.server.host = "127.0.0.1".into();
     config.billing.billing_required = true;
-    let config = Arc::new(config);
+    start_configured_server(config).await
+}
 
-    let state = build_test_state(config).await;
-    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-
-    let handle = llm_inference::server::start(state, shutdown_rx)
-        .await
-        .unwrap();
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    (server_port, shutdown_tx, handle)
+async fn start_configured_server(
+    mut config: OperatorConfig,
+) -> (u16, tokio::sync::watch::Sender<bool>, JoinHandle<()>) {
+    let port = free_port();
+    config.server.port = port;
+    config.server.host = "127.0.0.1".into();
+    let state = build_test_state(Arc::new(config)).await;
+    let (shutdown, receiver) = tokio::sync::watch::channel(false);
+    let handle = llm_inference::server::start(state, receiver).await.unwrap();
+    (port, shutdown, handle)
 }
 
 #[tokio::test]
 async fn test_streaming_through_handler() {
     let mock_vllm = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/health"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&mock_vllm)
+        .await;
 
     let sse_body = concat!(
         "data: {\"id\":\"chatcmpl-1\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"\"},\"finish_reason\":null}]}\n\n",
@@ -238,6 +218,11 @@ async fn test_streaming_through_handler() {
 #[tokio::test]
 async fn test_non_streaming_through_handler() {
     let mock_vllm = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/health"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&mock_vllm)
+        .await;
 
     let response_body = serde_json::json!({
         "id": "chatcmpl-test",
@@ -395,6 +380,11 @@ async fn test_provider_routes_listed_model() {
 async fn test_stream_field_defaults_to_false() {
     // Verify that omitting "stream" from the request body results in non-streaming
     let mock_vllm = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/health"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&mock_vllm)
+        .await;
 
     let response_body = serde_json::json!({
         "id": "chatcmpl-default",
@@ -448,6 +438,11 @@ async fn test_stream_field_defaults_to_false() {
 #[tokio::test]
 async fn test_billing_required_rejects_missing_spend_auth() {
     let mock_vllm = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/health"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&mock_vllm)
+        .await;
 
     // Set up a mock response (won't be reached because billing check happens first)
     Mock::given(method("POST"))
@@ -494,6 +489,11 @@ async fn test_billing_required_rejects_missing_spend_auth() {
 #[tokio::test]
 async fn test_max_spend_per_request_rejection() {
     let mock_vllm = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/health"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&mock_vllm)
+        .await;
 
     // No mock needed — the request should fail before reaching vLLM
     let (server_port, _shutdown_tx, _handle) = start_test_server(mock_vllm.address().port()).await;

@@ -7,6 +7,7 @@ license.workspace = true
 [features]
 default = ["chain"]
 chain = ["dep:blueprint-sdk"]
+chain-tests = ["chain", "dep:blueprint-anvil-testing-utils"]
 
 [lib]
 name = "llm_inference"
@@ -17,14 +18,14 @@ name = "llm-operator"
 path = "src/main.rs"
 required-features = ["chain"]
 
-# Minimal HTTP-only operator for E2E tests — skips BlueprintRunner and
-# Tangle Substrate, runs just the HTTP server + billing client.
+# HTTP operator; the chain runner is optional.
 [[bin]]
 name = "operator-lite"
 path = "src/bin/operator_lite.rs"
 
 [dependencies]
 blueprint-sdk = { workspace = true, features = ["tee"], optional = true }
+blueprint-anvil-testing-utils = { git = "https://github.com/tangle-network/blueprint", rev = "1159090e224e9c3c7a83f896300472d3196a5073", package = "blueprint-anvil-testing-utils", optional = true }
 alloy = { workspace = true }
 alloy-sol-types = { workspace = true }
 tokio = { workspace = true }
@@ -37,9 +38,11 @@ anyhow = { workspace = true }
 thiserror = { workspace = true }
 hex = { workspace = true }
 k256 = { workspace = true }
+regex = "1"
+unicode-normalization = "0.1"
 
 # Shared inference operator infrastructure (billing, metrics, health, server helpers).
-tangle-inference-core = { git = "https://github.com/tangle-network/tangle-inference-core", rev = "d23953eb7e04484a6830f0caeee0e89394760ea5", default-features = false, features = ["billing", "http", "metrics"] }
+tangle-inference-core = { git = "https://github.com/tangle-network/tangle-inference-core", rev = "41b987aafa4115658ae78d79c5cfe2419455c798", default-features = false, features = ["billing", "http", "metrics"] }
 
 # Web framework (for OpenAI-compatible HTTP server)
 axum = { version = "0.7", features = ["json", "macros"] }
@@ -61,7 +64,6 @@ uuid = { version = "1", features = ["v4"] }
 serde_json = { workspace = true }
 
 [dev-dependencies]
-blueprint-anvil-testing-utils = { git = "https://github.com/tangle-network/blueprint", rev = "1159090e224e9c3c7a83f896300472d3196a5073", package = "blueprint-anvil-testing-utils" }
 wiremock = "0.6"
 alloy-primitives = "1"
 alloy-sol-types = "1"
@@ -72,8 +74,8 @@ tempfile = "3"
 
 [[test]]
 name = "harness_e2e"
-required-features = ["chain"]
+required-features = ["chain-tests"]
 
 [[test]]
 name = "registration"
-required-features = ["chain"]
+required-features = ["chain-tests"]

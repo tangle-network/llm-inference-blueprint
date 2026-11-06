@@ -1,12 +1,4 @@
-//! OpenAI-compatible HTTP server for the vLLM operator.
-//!
-//! All shared infrastructure (nonce store, spend-auth validation, x402 headers,
-//! metrics, app state container) lives in `tangle-inference-core`. This module
-//! only contains:
-//!
-//! * `VllmBackend` — the backend attached to `AppState` via `AppStateBuilder`.
-//! * Request/response types for the OpenAI chat/completions wire format.
-//! * HTTP handlers that glue the shared billing flow to the vLLM subprocess.
+//! OpenAI HTTP adapter for the core serving engine and billing state.
 use crate::chat::ChatClient;
 use crate::config::OperatorConfig;
 use axum::{
@@ -25,8 +17,8 @@ use std::sync::Mutex;
 use std::time::Duration;
 use tangle_inference_core::payment::PaymentProof;
 use tangle_inference_core::server::{
-    authorize_request, error_response, payment_required, resolve_payment_proof, settle_request,
-    AuthorizedPayment,
+    authorize_request, backend_unavailable, error_response, payment_required,
+    resolve_payment_proof, settle_request, AuthorizedPayment,
 };
 use tangle_inference_core::{
     detect_gpus, AppState, CostModel, CostParams, GpuInfo, PerTokenCostModel, RequestGuard,
@@ -37,12 +29,7 @@ use tokio::task::JoinHandle;
 use tower_http::cors::CorsLayer;
 use tower_http::timeout::TimeoutLayer;
 use tower_http::trace::TraceLayer;
-/// Backend attached to `AppState` via `AppStateBuilder::backend`. Handlers
-/// retrieve it via `state.backend::<VllmBackend>().unwrap()`.
-///
-/// Owns the vLLM subprocess handle, a reference to the full operator config
-/// (for vllm-specific knobs only — all shared knobs are already on AppState),
-/// and a pre-built per-token cost model.
+/// Model configuration and request accounting attached to core application state.
 pub struct VllmBackend {
     pub config: Arc<OperatorConfig>,
     pub vllm: Arc<ChatClient>,
@@ -302,6 +289,13 @@ async fn chat_completions(
             );
         }
     };
+    let backend_ready = async {
+        // A configured remote provider owns its own health API; its HTTP response is checked below.
+        backend.config.vllm.provider_for(model_name).is_some()
+            || tokio::time::timeout(Duration::from_secs(12), backend.vllm.is_healthy())
+                .await
+                .unwrap_or(false)
+    };
     // Resolve the payment proof (body payment | spend_auth | x402 header), then
     // gate -> authorize -> (after serving) settle through the shared, rail-
     // agnostic billing flow. Shielded and direct differ only inside those core
@@ -326,12 +320,14 @@ async fn chat_completions(
             .map(|m| (m.content.to_string().len() as u32) / 4 + 1)
             .sum();
         let estimated_max_cost = backend.calculate_cost(estimated_prompt_tokens, req.max_tokens);
-        match authorize_request(&state, proof, estimated_max_cost, backend.vllm.is_healthy()).await
-        {
+        match authorize_request(&state, proof, estimated_max_cost, backend_ready).await {
             Ok(a) => Some(a),
             Err(resp) => return resp,
         }
     } else {
+        if !backend_ready.await {
+            return backend_unavailable();
+        }
         None
     };
     // Dispatch to streaming or non-streaming path.
@@ -341,6 +337,25 @@ async fn chat_completions(
         handle_non_streaming(state, req, authorized, metrics_guard, permit).await
     }
 }
+fn upstream_failure(error: &anyhow::Error) -> Response {
+    if let Some(error) = error.downcast_ref::<reqwest::Error>() {
+        if error.is_timeout()
+            || error.is_connect()
+            || error
+                .status()
+                .is_some_and(|status| matches!(status.as_u16(), 408 | 429 | 502 | 503 | 504))
+        {
+            return backend_unavailable();
+        }
+    }
+    error_response(
+        StatusCode::BAD_GATEWAY,
+        "Backend rejected the request.".into(),
+        "upstream_error",
+        "vllm_error",
+    )
+}
+
 async fn handle_non_streaming(
     state: AppState,
     req: ChatCompletionRequest,
@@ -351,15 +366,7 @@ async fn handle_non_streaming(
     let backend = backend_from(&state);
     let vllm_response = match backend.vllm.chat_completion(&req).await {
         Ok(r) => r,
-        Err(e) => {
-            tracing::error!(error = %e, "vLLM request failed");
-            return error_response(
-                StatusCode::BAD_GATEWAY,
-                format!("upstream vLLM error: {e}"),
-                "upstream_error",
-                "vllm_error",
-            );
-        }
+        Err(error) => return upstream_failure(&error),
     };
     metrics_guard.set_tokens(
         vllm_response.usage.prompt_tokens,
@@ -395,15 +402,7 @@ async fn handle_streaming(
     // Get the raw upstream SSE response as a byte stream
     let upstream = match backend.vllm.chat_completion_stream(&req).await {
         Ok(r) => r,
-        Err(e) => {
-            tracing::error!(error = %e, "vLLM streaming request failed");
-            return error_response(
-                StatusCode::BAD_GATEWAY,
-                format!("upstream vLLM error: {e}"),
-                "upstream_error",
-                "vllm_error",
-            );
-        }
+        Err(error) => return upstream_failure(&error),
     };
     let byte_stream = upstream.bytes_stream();
     // The authorization (with its per-account guard) moves into the settlement
@@ -495,12 +494,6 @@ async fn handle_streaming(
         })
     };
     let body = Body::from_stream(proxied_stream);
-    // Background task: waits for the stream to complete, settles billing,
-    // records metrics, releases the semaphore permit on drop.
-    //
-    // The JoinHandle is stored in `_settlement_handle` so that if the runtime
-    // shuts down before completion, the task's drop is visible in logs via
-    // the tracing guard inside the future.
     let settlement_handle = tokio::spawn(async move {
         // Guard that logs if this future is cancelled mid-flight (e.g. on shutdown).
         struct SettlementDropGuard(bool);
@@ -648,22 +641,4 @@ async fn gpu_health() -> Result<Json<Vec<GpuInfo>>, (StatusCode, String)> {
         Ok(gpus) => Ok(Json(gpus)),
         Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
     }
-}
-async fn metrics_handler() -> Response {
-    let body = tangle_inference_core::metrics::gather();
-    Response::builder()
-        .status(StatusCode::OK)
-        .header(
-            header::CONTENT_TYPE,
-            "text/plain; version=0.0.4; charset=utf-8",
-        )
-        .body(Body::from(body))
-        .unwrap_or_else(|e| {
-            error_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("failed to build metrics response: {e}"),
-                "internal_error",
-                "response_build_failed",
-            )
-        })
 }
