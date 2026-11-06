@@ -146,8 +146,9 @@ while not os.path.exists(sys.argv[3]) and os.getppid() == parent: server.handle_
         if !matches!(&ready, Ok(Ok(()))) {
             return Ok::<_, anyhow::Error>(());
         }
+        // The first call hashes /proc/self/exe once; a ~590 MB debug binary on a loaded host takes tens of seconds.
         let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(90))
             .build()?;
         let info: Value = client
             .get(format!("http://127.0.0.1:{operator_port}/v1/operator"))
