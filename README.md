@@ -79,6 +79,8 @@ verified extracted binary, `/health`, `/v1/models` and a real routed completion.
 On failure, switch `current` to the retained release and restart, then repeat
 these checks. Never reset the nonce store during an upgrade or recovery.
 
+SDK archives are built, checked through the packed client, and admitted by agent-runtime before the native release runs. The same [release workflow](.github/workflows/release.yml) then publishes the exact SDK archive through tcloud's maintained publisher using npm OIDC. Package identity and version come from [sdk/package.json](sdk/package.json); the npm trusted publisher must bind this repository and `release.yml`. SDK publication and UI adoption are separate from native artifact publication.
+
 ## Live testnet registration
 
 On Tempo Moderato, the serving registration is blueprint **10**, with

@@ -176,12 +176,18 @@ async function httpPeer(context) {
       const expected = context.cases[requestIndex]
       verified = getAddress(recovered) === getAddress(context.account)
         && String(fields.serviceId) === expected.serviceId
-        && String(fields.nonce) === expected.nonce && fields.amount === '17'
+        && String(fields.nonce) === expected.nonce && fields.amount === expected.amount
         && request.method === 'POST' && request.url === '/v1/chat/completions'
-        && body.model === 'fixture' && body.max_tokens === 1 && body.stream === false
+        && body.model === 'fixture' && body.stream === !!expected.stream
+        && (expected.stream || body.max_tokens === 1)
         && body.messages[0].role === 'user' && body.messages[0].content === 'Hello'
     } catch {}
     console.log(JSON.stringify({ type: 'authorization', index: requestIndex++, payload, verified }))
+    if (verified && context.cases[requestIndex - 1].stream) {
+      response.writeHead(200, { 'Content-Type': 'text/event-stream' })
+      response.end('data: {"choices":[{"delta":{"content":"accepted"}}]}\n\ndata: [DONE]\n\n')
+      return
+    }
     response.writeHead(verified ? 200 : 422, { 'Content-Type': 'application/json' })
     response.end(JSON.stringify(verified ? {
       id: 'sdk-http-peer', object: 'chat.completion', created: 1, model: 'fixture',
@@ -195,10 +201,11 @@ async function httpPeer(context) {
 async function proveHttpPeer() {
   const identity = generateCreditIdentity()
   const signer = createLocalSpendSigner(identity.spendingKeyPrivate)
-  const context = { account: signer.account, chainId: 31337,
+  const context = { account: identity.spendingKey, chainId: 31337,
     credits: '0x0000000000000000000000000000000000000001',
-    cases: [{ serviceId: '7', nonce: '3' },
-      { serviceId: '9007199254740993', nonce: '9007199254740993' }] }
+    cases: [{ serviceId: '7', nonce: '3', amount: '17' },
+      { serviceId: '9007199254740993', nonce: '9007199254740993', amount: '17' },
+      { serviceId: '7', nonce: '4', amount: '1540', stream: true }] }
   const child = spawn(process.execPath, ['--input-type=module', '-'], {
     cwd: resolve(here, '..'), env: {}, stdio: ['pipe', 'pipe', 'inherit'],
   })
@@ -225,8 +232,26 @@ async function proveHttpPeer() {
         shieldedCreditsAddress: context.credits, chainId: context.chainId,
         commitment: identity.commitment, serviceId: BigInt(example.serviceId),
         operatorAddress: '0x0000000000000000000000000000000000000002', signer,
+        model: 'fixture', pricePerInputToken: 2n, pricePerOutputToken: 3n,
         fetchImpl: (url, init) => fetch(url, { ...init, signal: AbortSignal.timeout(5000) }) })
       client.setNonce(BigInt(example.nonce))
+      if (example.stream) {
+        let accumulated, abort
+        try {
+          const result = new Promise((resolve, reject) => {
+            abort = client.chatStream([{ role: 'user', content: 'Hello' }], {
+              onToken: value => { accumulated = value.accumulated },
+              onDone: resolve, onError: reject,
+            })
+          })
+          const full = await Promise.race([result, new Promise((_, reject) => {
+            timer = setTimeout(() => reject(new Error('Packed UI stream timed out')), 5000)
+          })])
+          clearTimeout(timer)
+          if (full !== 'accepted' || accumulated !== full) throw new Error('UI stream callbacks did not receive output')
+        } finally { abort?.() }
+        continue
+      }
       const response = await client.chat([{ role: 'user', content: 'Hello' }],
         { model: 'fixture', maxTokens: 1, authorizedAmount: 17n })
       if (response.id !== 'sdk-http-peer') throw new Error('Unexpected HTTP peer response')
