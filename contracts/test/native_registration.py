@@ -134,13 +134,14 @@ with tempfile.TemporaryDirectory(prefix='native-registration-') as temp:
         decoded = json.loads(metadata)
         decoded = (decoded['data'] if isinstance(decoded, dict) else decoded)[0]
         a.output.with_suffix('.metadata.json').write_text(json.dumps({'wire': metadata_wire, 'decoded': decoded}, indent=2) + '\n')
-        assert decoded[-1] == profile, (decoded, profile)
+        observed_profile = json.loads(decoded[-1]) if isinstance(decoded[-1], str) else decoded[-1]
+        assert observed_profile == json.loads(profile), (observed_profile, profile)
         assert bytes.fromhex(binary_sha) in wire, 'registered binary digest changed'
         repeated = run(args + ['--keystore-path', str(temp / 'creator')], check=False)
         assert repeated.returncode != 0, 'manager accepted a second blueprint binding'
         assert int(read(registry, 'blueprintCount()(uint64)').split()[0]) == 1
         report = {'source': run(['git', 'rev-parse', 'HEAD']).stdout.strip(), 'registry': registry,
-                  'manager': manager, 'creator': creator, 'blueprint_id': 0, 'profiling_data': profile,
+                  'manager': manager, 'creator': creator, 'blueprint_id': 0, 'profiling_data': observed_profile,
                   'declared_model': configured['vllm']['model'], 'declared_max_model_len': configured['vllm']['max_model_len'],
                   'declared_vram_mib': configured['gpu']['min_vram_mib'], 'gpu_requirement_basis': 'Unmeasured config.example.json minimum, rounded up to integer decimal GB',
                   'binary_sha256': binary_sha, 'binary_bytes': binary.stat().st_size,
