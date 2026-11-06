@@ -64,6 +64,7 @@ uuid = { version = "1", features = ["v4"] }
 serde_json = { workspace = true }
 
 [dev-dependencies]
+blueprint-keystore = { version = "=0.2.0-alpha.15", default-features = false, features = ["std", "ecdsa"] }
 wiremock = "0.6"
 alloy-primitives = "1"
 alloy-sol-types = "1"

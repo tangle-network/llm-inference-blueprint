@@ -70,19 +70,19 @@ version = "1.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "50ab0cd8afe573d1f7dc2353698a51b1f93aec362c8211e28cfd3948c6adba39"
 dependencies = [
- "alloy-consensus",
+ "alloy-consensus 1.8.3",
  "alloy-contract",
  "alloy-core",
  "alloy-eips 1.8.3",
  "alloy-genesis",
- "alloy-network",
+ "alloy-network 1.8.3",
  "alloy-provider",
  "alloy-pubsub",
  "alloy-rpc-client 1.8.3",
  "alloy-rpc-types",
- "alloy-serde",
- "alloy-signer",
- "alloy-signer-local",
+ "alloy-serde 1.8.3",
+ "alloy-signer 1.8.3",
+ "alloy-signer-local 1.8.3",
  "alloy-transport 1.8.3",
  "alloy-transport-http 1.8.3",
  "alloy-transport-ipc",
@@ -110,9 +110,36 @@ dependencies = [
  "alloy-eips 1.8.3",
  "alloy-primitives",
  "alloy-rlp",
- "alloy-serde",
+ "alloy-serde 1.8.3",
  "alloy-trie",
- "alloy-tx-macros",
+ "alloy-tx-macros 1.8.3",
+ "auto_impl",
+ "borsh",
+ "c-kzg",
+ "derive_more",
+ "either",
+ "k256",
+ "once_cell",
+ "rand 0.8.8",
+ "secp256k1 0.30.0",
+ "serde",
+ "serde_json",
+ "serde_with",
+ "thiserror 2.0.20",
+]
+
+[[package]]
+name = "alloy-consensus"
+version = "2.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "727016fed834c2392d014dd697ea473f3e47bcec31ba31ccffa9c1d18ed904e5"
+dependencies = [
+ "alloy-eips 2.5.0",
+ "alloy-primitives",
+ "alloy-rlp",
+ "alloy-serde 2.5.0",
+ "alloy-trie",
+ "alloy-tx-macros 2.5.0",
  "auto_impl",
  "borsh",
  "c-kzg",
@@ -134,11 +161,25 @@ version = "1.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "118998d9015332ab1b4720ae1f1e3009491966a0349938a1f43ff45a8a4c6299"
 dependencies = [
- "alloy-consensus",
+ "alloy-consensus 1.8.3",
  "alloy-eips 1.8.3",
  "alloy-primitives",
  "alloy-rlp",
- "alloy-serde",
+ "alloy-serde 1.8.3",
+ "serde",
+]
+
+[[package]]
+name = "alloy-consensus-any"
+version = "2.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6ea5ae60bbb3ce9dc52685a70a3755ad4432045fd38079b763cfe5127c706134"
+dependencies = [
+ "alloy-consensus 2.5.0",
+ "alloy-eips 2.5.0",
+ "alloy-primitives",
+ "alloy-rlp",
+ "alloy-serde 2.5.0",
  "serde",
 ]
 
@@ -148,15 +189,15 @@ version = "1.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7ac9e0c34dc6bce643b182049cdfcca1b8ce7d9c260cbdd561f511873b7e26cd"
 dependencies = [
- "alloy-consensus",
+ "alloy-consensus 1.8.3",
  "alloy-dyn-abi",
  "alloy-json-abi",
- "alloy-network",
- "alloy-network-primitives",
+ "alloy-network 1.8.3",
+ "alloy-network-primitives 1.8.3",
  "alloy-primitives",
  "alloy-provider",
  "alloy-pubsub",
- "alloy-rpc-types-eth",
+ "alloy-rpc-types-eth 1.8.3",
  "alloy-sol-types",
  "alloy-transport 1.8.3",
  "futures",
@@ -249,6 +290,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "alloy-eip7928"
+version = "0.4.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6a12e1dc70236cfb8e79b96dd8544aed47c39e2f45dc6b51c3703e969e052faa"
+dependencies = [
+ "alloy-primitives",
+ "alloy-rlp",
+ "borsh",
+ "once_cell",
+ "serde",
+ "thiserror 2.0.20",
+]
+
+[[package]]
+name = "alloy-eip8141"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "36422c14bd57dcd638e276c8c9d7ac09eb16598e3a9dbd34e4b55267d4565b5e"
+dependencies = [
+ "alloy-primitives",
+ "alloy-rlp",
+ "borsh",
+ "serde",
+ "thiserror 2.0.20",
+]
+
+[[package]]
 name = "alloy-eips"
 version = "1.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -257,10 +325,10 @@ dependencies = [
  "alloy-eip2124",
  "alloy-eip2930",
  "alloy-eip7702",
- "alloy-eip7928",
+ "alloy-eip7928 0.3.7",
  "alloy-primitives",
  "alloy-rlp",
- "alloy-serde",
+ "alloy-serde 1.8.3",
  "auto_impl",
  "borsh",
  "c-kzg",
@@ -273,19 +341,26 @@ dependencies = [
 
 [[package]]
 name = "alloy-eips"
-version = "2.0.5"
+version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0dca4c89ace90684b4b77366d00631ed498c9af962079af2a5dbc593a0618a77"
+checksum = "e01905444bd2fc330673f11d2466c0f54e8488f7ce3132b6a5e6497916fca765"
 dependencies = [
  "alloy-eip2124",
  "alloy-eip2930",
  "alloy-eip7702",
- "alloy-eip7928",
+ "alloy-eip7928 0.4.11",
+ "alloy-eip8141",
  "alloy-primitives",
  "alloy-rlp",
+ "alloy-serde 2.5.0",
  "auto_impl",
+ "borsh",
+ "c-kzg",
  "derive_more",
  "either",
+ "serde",
+ "serde_with",
+ "sha2 0.10.9",
 ]
 
 [[package]]
@@ -296,7 +371,7 @@ checksum = "bbf9480307b09d22876efb67d30cadd9013134c21f3a17ec9f93fd7536d38024"
 dependencies = [
  "alloy-eips 1.8.3",
  "alloy-primitives",
- "alloy-serde",
+ "alloy-serde 1.8.3",
  "alloy-trie",
  "borsh",
  "serde",
@@ -332,9 +407,9 @@ dependencies = [
 
 [[package]]
 name = "alloy-json-rpc"
-version = "2.0.5"
+version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ec0a82e56b1843bce483942d54fcadea92e676f1bde162e93c7d3b621fabc4e1"
+checksum = "fff9cb760601d352d1e59aab5803c3fb6dc99824b6883f5c7a781aacd4b54c66"
 dependencies = [
  "alloy-primitives",
  "alloy-sol-types",
@@ -351,16 +426,42 @@ version = "1.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7197a66d94c4de1591cdc16a9bcea5f8cccd0da81b865b49aef97b1b4016e0fa"
 dependencies = [
- "alloy-consensus",
- "alloy-consensus-any",
+ "alloy-consensus 1.8.3",
+ "alloy-consensus-any 1.8.3",
  "alloy-eips 1.8.3",
  "alloy-json-rpc 1.8.3",
- "alloy-network-primitives",
+ "alloy-network-primitives 1.8.3",
  "alloy-primitives",
- "alloy-rpc-types-any",
- "alloy-rpc-types-eth",
- "alloy-serde",
- "alloy-signer",
+ "alloy-rpc-types-any 1.8.3",
+ "alloy-rpc-types-eth 1.8.3",
+ "alloy-serde 1.8.3",
+ "alloy-signer 1.8.3",
+ "alloy-sol-types",
+ "async-trait",
+ "auto_impl",
+ "derive_more",
+ "futures-utils-wasm",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+]
+
+[[package]]
+name = "alloy-network"
+version = "2.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e11dfba13dac9e54576bf41e1b7461491367e0bce6a2a4293b9e40ffa3ebd5e9"
+dependencies = [
+ "alloy-consensus 2.5.0",
+ "alloy-consensus-any 2.5.0",
+ "alloy-eips 2.5.0",
+ "alloy-json-rpc 2.5.0",
+ "alloy-network-primitives 2.5.0",
+ "alloy-primitives",
+ "alloy-rpc-types-any 2.5.0",
+ "alloy-rpc-types-eth 2.5.0",
+ "alloy-serde 2.5.0",
+ "alloy-signer 2.5.0",
  "alloy-sol-types",
  "async-trait",
  "auto_impl",
@@ -377,10 +478,23 @@ version = "1.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "eb82711d59a43fdfd79727c99f270b974c784ec4eb5728a0d0d22f26716c87ef"
 dependencies = [
- "alloy-consensus",
+ "alloy-consensus 1.8.3",
  "alloy-eips 1.8.3",
  "alloy-primitives",
- "alloy-serde",
+ "alloy-serde 1.8.3",
+ "serde",
+]
+
+[[package]]
+name = "alloy-network-primitives"
+version = "2.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3819bf6794d25f679d42c3f2b168e12cae08c56bb41d393cb6249b55e6d5933e"
+dependencies = [
+ "alloy-consensus 2.5.0",
+ "alloy-eips 2.5.0",
+ "alloy-primitives",
+ "alloy-serde 2.5.0",
  "serde",
 ]
 
@@ -420,20 +534,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bf6b18b929ef1d078b834c3631e9c925177f3b23ddc6fa08a722d13047205876"
 dependencies = [
  "alloy-chains",
- "alloy-consensus",
+ "alloy-consensus 1.8.3",
  "alloy-eips 1.8.3",
  "alloy-json-rpc 1.8.3",
- "alloy-network",
- "alloy-network-primitives",
+ "alloy-network 1.8.3",
+ "alloy-network-primitives 1.8.3",
  "alloy-primitives",
  "alloy-pubsub",
  "alloy-rpc-client 1.8.3",
  "alloy-rpc-types-anvil",
  "alloy-rpc-types-debug",
- "alloy-rpc-types-eth",
+ "alloy-rpc-types-eth 1.8.3",
  "alloy-rpc-types-trace",
  "alloy-rpc-types-txpool",
- "alloy-signer",
+ "alloy-signer 1.8.3",
  "alloy-sol-types",
  "alloy-transport 1.8.3",
  "alloy-transport-http 1.8.3",
@@ -535,7 +649,7 @@ version = "2.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "24f461f091dc8f657e73b5dea18fd63d5c7049720cd252f1eade4a7ebed6a7e1"
 dependencies = [
- "alloy-json-rpc 2.0.5",
+ "alloy-json-rpc 2.5.0",
  "alloy-primitives",
  "alloy-transport 2.0.5",
  "futures",
@@ -559,10 +673,10 @@ dependencies = [
  "alloy-rpc-types-anvil",
  "alloy-rpc-types-debug",
  "alloy-rpc-types-engine",
- "alloy-rpc-types-eth",
+ "alloy-rpc-types-eth 1.8.3",
  "alloy-rpc-types-trace",
  "alloy-rpc-types-txpool",
- "alloy-serde",
+ "alloy-serde 1.8.3",
  "serde",
 ]
 
@@ -573,8 +687,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "47df51bedb3e6062cb9981187a51e86d0d64a4de66eb0855e9efe6574b044ddf"
 dependencies = [
  "alloy-primitives",
- "alloy-rpc-types-eth",
- "alloy-serde",
+ "alloy-rpc-types-eth 1.8.3",
+ "alloy-serde 1.8.3",
  "serde",
 ]
 
@@ -584,9 +698,24 @@ version = "1.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3823026d1ed239a40f12364fac50726c8daf1b6ab8077a97212c5123910429ed"
 dependencies = [
- "alloy-consensus-any",
- "alloy-rpc-types-eth",
- "alloy-serde",
+ "alloy-consensus-any 1.8.3",
+ "alloy-rpc-types-eth 1.8.3",
+ "alloy-serde 1.8.3",
+]
+
+[[package]]
+name = "alloy-rpc-types-any"
+version = "2.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9c5d320312e4a9481b18185429e57fa161dbf9468414ba5667aff4ebe7bd37e7"
+dependencies = [
+ "alloy-consensus-any 2.5.0",
+ "alloy-network-primitives 2.5.0",
+ "alloy-primitives",
+ "alloy-rpc-types-eth 2.5.0",
+ "alloy-serde 2.5.0",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -607,11 +736,11 @@ version = "1.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bb9b97b6e7965679ad22df297dda809b11cebc13405c1b537e5cffecc95834fa"
 dependencies = [
- "alloy-consensus",
+ "alloy-consensus 1.8.3",
  "alloy-eips 1.8.3",
  "alloy-primitives",
  "alloy-rlp",
- "alloy-serde",
+ "alloy-serde 1.8.3",
  "derive_more",
  "rand 0.8.8",
  "serde",
@@ -624,14 +753,36 @@ version = "1.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "59c095f92c4e1ff4981d89e9aa02d5f98c762a1980ab66bec49c44be11349da2"
 dependencies = [
- "alloy-consensus",
- "alloy-consensus-any",
+ "alloy-consensus 1.8.3",
+ "alloy-consensus-any 1.8.3",
  "alloy-eips 1.8.3",
- "alloy-network-primitives",
+ "alloy-network-primitives 1.8.3",
  "alloy-primitives",
  "alloy-rlp",
- "alloy-serde",
+ "alloy-serde 1.8.3",
  "alloy-sol-types",
+ "itertools 0.14.0",
+ "serde",
+ "serde_json",
+ "serde_with",
+ "thiserror 2.0.20",
+]
+
+[[package]]
+name = "alloy-rpc-types-eth"
+version = "2.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32c475e21fe8a8caa02166b326ed22207a1a0597fc9b0dcdfb46e2fe6f80dadf"
+dependencies = [
+ "alloy-consensus 2.5.0",
+ "alloy-consensus-any 2.5.0",
+ "alloy-eips 2.5.0",
+ "alloy-network-primitives 2.5.0",
+ "alloy-primitives",
+ "alloy-rlp",
+ "alloy-serde 2.5.0",
+ "alloy-sol-types",
+ "alloy-trie",
  "itertools 0.14.0",
  "serde",
  "serde_json",
@@ -646,8 +797,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2e5a4d010f86cd4e01e5205ec273911e538e1738e76d8bafe9ecd245910ea5a3"
 dependencies = [
  "alloy-primitives",
- "alloy-rpc-types-eth",
- "alloy-serde",
+ "alloy-rpc-types-eth 1.8.3",
+ "alloy-serde 1.8.3",
  "serde",
  "serde_json",
  "thiserror 2.0.20",
@@ -660,8 +811,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "942d26a2ca8891b26de4a8529d21091e21c1093e27eb99698f1a86405c76b1ff"
 dependencies = [
  "alloy-primitives",
- "alloy-rpc-types-eth",
- "alloy-serde",
+ "alloy-rpc-types-eth 1.8.3",
+ "alloy-serde 1.8.3",
  "serde",
 ]
 
@@ -670,6 +821,17 @@ name = "alloy-serde"
 version = "1.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "11ece63b89294b8614ab3f483560c08d016930f842bf36da56bf0b764a15c11e"
+dependencies = [
+ "alloy-primitives",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "alloy-serde"
+version = "2.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4f44f297d3b9e3ca2c3039e3c0ed69acde9b35edda15381cf78f725b7263fbe2"
 dependencies = [
  "alloy-primitives",
  "serde",
@@ -692,15 +854,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "alloy-signer"
+version = "2.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e7de6fd34b5ba1789d482fa800dd97219b34765d6b07633a989a24d2dace770e"
+dependencies = [
+ "alloy-primitives",
+ "async-trait",
+ "auto_impl",
+ "either",
+ "elliptic-curve",
+ "k256",
+ "thiserror 2.0.20",
+]
+
+[[package]]
 name = "alloy-signer-local"
 version = "1.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f721f4bf2e4812e5505aaf5de16ef3065a8e26b9139ac885862d00b5a55a659a"
 dependencies = [
- "alloy-consensus",
- "alloy-network",
+ "alloy-consensus 1.8.3",
+ "alloy-network 1.8.3",
  "alloy-primitives",
- "alloy-signer",
+ "alloy-signer 1.8.3",
  "async-trait",
  "coins-bip32",
  "coins-bip39",
@@ -708,6 +885,22 @@ dependencies = [
  "rand 0.8.8",
  "thiserror 2.0.20",
  "zeroize",
+]
+
+[[package]]
+name = "alloy-signer-local"
+version = "2.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d6909c09d586c7b55eced688754d57dde8a6bcbae2b83e69a9b9250e74cfd79e"
+dependencies = [
+ "alloy-consensus 2.5.0",
+ "alloy-network 2.5.0",
+ "alloy-primitives",
+ "alloy-signer 2.5.0",
+ "async-trait",
+ "k256",
+ "rand 0.8.8",
+ "thiserror 2.0.20",
 ]
 
 [[package]]
@@ -812,7 +1005,7 @@ version = "2.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "86052fdcec72d37ca4aa4b66254601e7453c45a6e1c70aa4561033d002fb80cc"
 dependencies = [
- "alloy-json-rpc 2.0.5",
+ "alloy-json-rpc 2.5.0",
  "auto_impl",
  "base64 0.22.1",
  "derive_more",
@@ -897,9 +1090,9 @@ dependencies = [
 
 [[package]]
 name = "alloy-trie"
-version = "0.9.5"
+version = "0.9.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3f14b5d9b2c2173980202c6ff470d96e7c5e202c65a9f67884ad565226df7fbb"
+checksum = "70c7c04b6e5a7a2325f53d38c319a47d01c3609b44845ac2801bac9643fe26b9"
 dependencies = [
  "alloy-primitives",
  "alloy-rlp",
@@ -916,6 +1109,18 @@ name = "alloy-tx-macros"
 version = "1.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d69722eddcdf1ce096c3ab66cf8116999363f734eb36fe94a148f4f71c85da84"
+dependencies = [
+ "darling",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "alloy-tx-macros"
+version = "2.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "60fa90c57738ace5b38106c9f743f3d6d47de09a82e82ecfc42702c1acf116ee"
 dependencies = [
  "darling",
  "proc-macro2",
@@ -2035,26 +2240,26 @@ name = "blueprint-anvil-testing-utils"
 version = "0.2.0-alpha.19"
 source = "git+https://github.com/tangle-network/blueprint?rev=1159090e224e9c3c7a83f896300472d3196a5073#1159090e224e9c3c7a83f896300472d3196a5073"
 dependencies = [
- "alloy-consensus",
- "alloy-eips 2.0.5",
- "alloy-network",
+ "alloy-consensus 1.8.3",
+ "alloy-eips 2.5.0",
+ "alloy-network 1.8.3",
  "alloy-primitives",
  "alloy-provider",
  "alloy-rpc-types",
- "alloy-rpc-types-eth",
- "alloy-signer-local",
+ "alloy-rpc-types-eth 1.8.3",
+ "alloy-signer-local 1.8.3",
  "alloy-transport 1.8.3",
  "anyhow",
  "blueprint-chain-setup-anvil",
  "blueprint-client-tangle",
  "blueprint-core",
  "blueprint-core-testing-utils",
- "blueprint-crypto",
- "blueprint-keystore",
+ "blueprint-crypto 0.2.0-alpha.11",
+ "blueprint-keystore 0.2.0-alpha.14",
  "blueprint-manager-bridge",
  "blueprint-router",
  "blueprint-runner",
- "blueprint-std",
+ "blueprint-std 0.2.0-alpha.7",
  "blueprint-tangle-extra",
  "futures-util",
  "hex",
@@ -2076,8 +2281,8 @@ dependencies = [
  "axum 0.8.9",
  "base64 0.22.1",
  "blueprint-core",
- "blueprint-crypto",
- "blueprint-std",
+ "blueprint-crypto 0.2.0-alpha.11",
+ "blueprint-std 0.2.0-alpha.7",
  "chacha20poly1305",
  "crc32fast",
  "hashbrown 0.16.1",
@@ -2129,11 +2334,11 @@ dependencies = [
  "alloy-contract",
  "alloy-provider",
  "alloy-rpc-types",
- "alloy-rpc-types-eth",
+ "alloy-rpc-types-eth 1.8.3",
  "blueprint-core",
  "blueprint-core-testing-utils",
- "blueprint-keystore",
- "blueprint-std",
+ "blueprint-keystore 0.2.0-alpha.14",
+ "blueprint-std 0.2.0-alpha.7",
  "serde",
  "serde_json",
  "tempfile",
@@ -2149,7 +2354,7 @@ version = "0.2.0-alpha.8"
 source = "git+https://github.com/tangle-network/blueprint?rev=1159090e224e9c3c7a83f896300472d3196a5073#1159090e224e9c3c7a83f896300472d3196a5073"
 dependencies = [
  "auto_impl",
- "blueprint-std",
+ "blueprint-std 0.2.0-alpha.7",
  "thiserror 2.0.20",
 ]
 
@@ -2158,20 +2363,20 @@ name = "blueprint-client-evm"
 version = "0.2.0-alpha.9"
 source = "git+https://github.com/tangle-network/blueprint?rev=1159090e224e9c3c7a83f896300472d3196a5073#1159090e224e9c3c7a83f896300472d3196a5073"
 dependencies = [
- "alloy-consensus",
+ "alloy-consensus 1.8.3",
  "alloy-json-rpc 1.8.3",
- "alloy-network",
+ "alloy-network 1.8.3",
  "alloy-primitives",
  "alloy-provider",
  "alloy-pubsub",
  "alloy-rlp",
  "alloy-rpc-types",
- "alloy-rpc-types-eth",
+ "alloy-rpc-types-eth 1.8.3",
  "alloy-transport 1.8.3",
  "blueprint-client-core",
  "blueprint-core",
  "blueprint-metrics-rpc-calls",
- "blueprint-std",
+ "blueprint-std 0.2.0-alpha.7",
  "hex",
  "serde",
  "serde_json",
@@ -2186,19 +2391,19 @@ version = "0.2.0-alpha.16"
 source = "git+https://github.com/tangle-network/blueprint?rev=1159090e224e9c3c7a83f896300472d3196a5073#1159090e224e9c3c7a83f896300472d3196a5073"
 dependencies = [
  "alloy-contract",
- "alloy-network",
+ "alloy-network 1.8.3",
  "alloy-primitives",
  "alloy-provider",
  "alloy-rpc-types",
- "alloy-signer",
- "alloy-signer-local",
+ "alloy-signer 1.8.3",
+ "alloy-signer-local 1.8.3",
  "alloy-sol-types",
  "alloy-transport 1.8.3",
  "blueprint-client-core",
  "blueprint-core",
- "blueprint-crypto",
- "blueprint-keystore",
- "blueprint-std",
+ "blueprint-crypto 0.2.0-alpha.11",
+ "blueprint-keystore 0.2.0-alpha.14",
+ "blueprint-std 0.2.0-alpha.7",
  "futures",
  "futures-core",
  "k256",
@@ -2219,7 +2424,7 @@ dependencies = [
  "blueprint-client-core",
  "blueprint-client-evm",
  "blueprint-client-tangle",
- "blueprint-std",
+ "blueprint-std 0.2.0-alpha.7",
  "thiserror 2.0.20",
 ]
 
@@ -2240,10 +2445,10 @@ source = "git+https://github.com/tangle-network/blueprint?rev=1159090e224e9c3c7a
 dependencies = [
  "blueprint-client-tangle",
  "blueprint-clients",
- "blueprint-keystore",
+ "blueprint-keystore 0.2.0-alpha.14",
  "blueprint-networking",
  "blueprint-runner",
- "blueprint-std",
+ "blueprint-std 0.2.0-alpha.7",
 ]
 
 [[package]]
@@ -2268,7 +2473,7 @@ dependencies = [
  "blueprint-auth",
  "blueprint-clients",
  "blueprint-core",
- "blueprint-keystore",
+ "blueprint-keystore 0.2.0-alpha.14",
  "blueprint-manager-bridge",
  "blueprint-qos",
  "blueprint-router",
@@ -2285,13 +2490,28 @@ name = "blueprint-crypto"
 version = "0.2.0-alpha.11"
 source = "git+https://github.com/tangle-network/blueprint?rev=1159090e224e9c3c7a83f896300472d3196a5073#1159090e224e9c3c7a83f896300472d3196a5073"
 dependencies = [
- "blueprint-crypto-bls",
- "blueprint-crypto-bn254",
- "blueprint-crypto-core",
- "blueprint-crypto-ed25519",
+ "blueprint-crypto-bls 0.2.0-alpha.11",
+ "blueprint-crypto-bn254 0.2.0-alpha.10",
+ "blueprint-crypto-core 0.2.0-alpha.7",
+ "blueprint-crypto-ed25519 0.2.0-alpha.7",
  "blueprint-crypto-hashing",
- "blueprint-crypto-k256",
- "blueprint-crypto-sr25519",
+ "blueprint-crypto-k256 0.2.0-alpha.8",
+ "blueprint-crypto-sr25519 0.2.0-alpha.7",
+ "thiserror 2.0.20",
+]
+
+[[package]]
+name = "blueprint-crypto"
+version = "0.2.0-alpha.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6403864928f8faedea4ec11f9d82a8aa9d58e93b6b0acb36a3d8eb7fab35d470"
+dependencies = [
+ "blueprint-crypto-bls 0.2.0-alpha.12",
+ "blueprint-crypto-bn254 0.2.0-alpha.11",
+ "blueprint-crypto-core 0.2.0-alpha.8",
+ "blueprint-crypto-ed25519 0.2.0-alpha.8",
+ "blueprint-crypto-k256 0.2.0-alpha.9",
+ "blueprint-crypto-sr25519 0.2.0-alpha.8",
  "thiserror 2.0.20",
 ]
 
@@ -2301,8 +2521,26 @@ version = "0.2.0-alpha.11"
 source = "git+https://github.com/tangle-network/blueprint?rev=1159090e224e9c3c7a83f896300472d3196a5073#1159090e224e9c3c7a83f896300472d3196a5073"
 dependencies = [
  "ark-serialize 0.5.0",
- "blueprint-crypto-core",
- "blueprint-std",
+ "blueprint-crypto-core 0.2.0-alpha.7",
+ "blueprint-std 0.2.0-alpha.7",
+ "hex",
+ "paste",
+ "serde",
+ "serde_bytes",
+ "thiserror 2.0.20",
+ "tnt-bls",
+ "zeroize",
+]
+
+[[package]]
+name = "blueprint-crypto-bls"
+version = "0.2.0-alpha.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "effb657cd49d263b692a6c22b0a5c43f88a8843300e76b1d4843df5570521c16"
+dependencies = [
+ "ark-serialize 0.5.0",
+ "blueprint-crypto-core 0.2.0-alpha.8",
+ "blueprint-std 0.2.0-alpha.8",
  "hex",
  "paste",
  "serde",
@@ -2321,8 +2559,31 @@ dependencies = [
  "ark-ec 0.6.0",
  "ark-ff 0.6.0",
  "ark-serialize 0.6.0",
- "blueprint-crypto-core",
- "blueprint-std",
+ "blueprint-crypto-core 0.2.0-alpha.7",
+ "blueprint-std 0.2.0-alpha.7",
+ "hex",
+ "num-bigint",
+ "num-traits",
+ "serde",
+ "serde_bytes",
+ "sha2 0.10.9",
+ "sha3 0.10.9",
+ "thiserror 2.0.20",
+ "zeroize",
+]
+
+[[package]]
+name = "blueprint-crypto-bn254"
+version = "0.2.0-alpha.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7d64f3cef40017881d3f5e208d3a525c8feb85ad0e1b52fc85eeb3017b6b2d40"
+dependencies = [
+ "ark-bn254 0.6.0",
+ "ark-ec 0.6.0",
+ "ark-ff 0.6.0",
+ "ark-serialize 0.6.0",
+ "blueprint-crypto-core 0.2.0-alpha.8",
+ "blueprint-std 0.2.0-alpha.8",
  "hex",
  "num-bigint",
  "num-traits",
@@ -2339,7 +2600,19 @@ name = "blueprint-crypto-core"
 version = "0.2.0-alpha.7"
 source = "git+https://github.com/tangle-network/blueprint?rev=1159090e224e9c3c7a83f896300472d3196a5073#1159090e224e9c3c7a83f896300472d3196a5073"
 dependencies = [
- "blueprint-std",
+ "blueprint-std 0.2.0-alpha.7",
+ "clap",
+ "serde",
+ "thiserror 2.0.20",
+]
+
+[[package]]
+name = "blueprint-crypto-core"
+version = "0.2.0-alpha.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "373c540bb09130d51de7648858cc4ee55b6968f50d2008f1da183376554281df"
+dependencies = [
+ "blueprint-std 0.2.0-alpha.8",
  "clap",
  "serde",
  "thiserror 2.0.20",
@@ -2350,8 +2623,24 @@ name = "blueprint-crypto-ed25519"
 version = "0.2.0-alpha.7"
 source = "git+https://github.com/tangle-network/blueprint?rev=1159090e224e9c3c7a83f896300472d3196a5073#1159090e224e9c3c7a83f896300472d3196a5073"
 dependencies = [
- "blueprint-crypto-core",
- "blueprint-std",
+ "blueprint-crypto-core 0.2.0-alpha.7",
+ "blueprint-std 0.2.0-alpha.7",
+ "ed25519-zebra",
+ "hex",
+ "serde",
+ "serde_bytes",
+ "thiserror 2.0.20",
+ "zeroize",
+]
+
+[[package]]
+name = "blueprint-crypto-ed25519"
+version = "0.2.0-alpha.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6f4e95224a4c7573cbd4ec9a068adb01fc23f0ff66da06a110567f4d0a5f7fdf"
+dependencies = [
+ "blueprint-crypto-core 0.2.0-alpha.8",
+ "blueprint-std 0.2.0-alpha.8",
  "ed25519-zebra",
  "hex",
  "serde",
@@ -2367,7 +2656,7 @@ source = "git+https://github.com/tangle-network/blueprint?rev=1159090e224e9c3c7a
 dependencies = [
  "argon2",
  "blake3",
- "blueprint-std",
+ "blueprint-std 0.2.0-alpha.7",
  "hkdf",
  "sha2 0.10.9",
  "sha3 0.10.9",
@@ -2379,9 +2668,27 @@ version = "0.2.0-alpha.8"
 source = "git+https://github.com/tangle-network/blueprint?rev=1159090e224e9c3c7a83f896300472d3196a5073#1159090e224e9c3c7a83f896300472d3196a5073"
 dependencies = [
  "alloy-primitives",
- "alloy-signer-local",
- "blueprint-crypto-core",
- "blueprint-std",
+ "alloy-signer-local 1.8.3",
+ "blueprint-crypto-core 0.2.0-alpha.7",
+ "blueprint-std 0.2.0-alpha.7",
+ "hex",
+ "k256",
+ "serde",
+ "serde_bytes",
+ "thiserror 2.0.20",
+ "zeroize",
+]
+
+[[package]]
+name = "blueprint-crypto-k256"
+version = "0.2.0-alpha.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bdaab0be1bacbd6643d65eca442b0b61418c18263bbdb52f5eb926a4aaafe73c"
+dependencies = [
+ "alloy-primitives",
+ "alloy-signer-local 2.5.0",
+ "blueprint-crypto-core 0.2.0-alpha.8",
+ "blueprint-std 0.2.0-alpha.8",
  "hex",
  "k256",
  "serde",
@@ -2395,8 +2702,24 @@ name = "blueprint-crypto-sr25519"
 version = "0.2.0-alpha.7"
 source = "git+https://github.com/tangle-network/blueprint?rev=1159090e224e9c3c7a83f896300472d3196a5073#1159090e224e9c3c7a83f896300472d3196a5073"
 dependencies = [
- "blueprint-crypto-core",
- "blueprint-std",
+ "blueprint-crypto-core 0.2.0-alpha.7",
+ "blueprint-std 0.2.0-alpha.7",
+ "hex",
+ "schnorrkel",
+ "serde",
+ "serde_bytes",
+ "thiserror 2.0.20",
+ "zeroize",
+]
+
+[[package]]
+name = "blueprint-crypto-sr25519"
+version = "0.2.0-alpha.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "755349dc2b537a8097c084ec43ef56f2b109a85131623af5acfa075af73d2af3"
+dependencies = [
+ "blueprint-crypto-core 0.2.0-alpha.8",
+ "blueprint-std 0.2.0-alpha.8",
  "hex",
  "schnorrkel",
  "serde",
@@ -2410,20 +2733,20 @@ name = "blueprint-evm-extra"
 version = "0.2.0-alpha.8"
 source = "git+https://github.com/tangle-network/blueprint?rev=1159090e224e9c3c7a83f896300472d3196a5073#1159090e224e9c3c7a83f896300472d3196a5073"
 dependencies = [
- "alloy-consensus",
- "alloy-network",
+ "alloy-consensus 1.8.3",
+ "alloy-network 1.8.3",
  "alloy-primitives",
  "alloy-provider",
  "alloy-rlp",
  "alloy-rpc-client 2.0.5",
  "alloy-rpc-types",
- "alloy-signer-local",
+ "alloy-signer-local 1.8.3",
  "alloy-sol-types",
  "alloy-transport 1.8.3",
  "alloy-transport-http 2.0.5",
  "async-stream",
  "blueprint-core",
- "blueprint-std",
+ "blueprint-std 0.2.0-alpha.7",
  "bytes",
  "document-features",
  "futures",
@@ -2441,17 +2764,45 @@ name = "blueprint-keystore"
 version = "0.2.0-alpha.14"
 source = "git+https://github.com/tangle-network/blueprint?rev=1159090e224e9c3c7a83f896300472d3196a5073#1159090e224e9c3c7a83f896300472d3196a5073"
 dependencies = [
- "alloy-network",
+ "alloy-network 1.8.3",
  "alloy-primitives",
- "alloy-signer",
- "alloy-signer-local",
+ "alloy-signer 1.8.3",
+ "alloy-signer-local 1.8.3",
  "ark-bn254 0.6.0",
  "ark-ec 0.6.0",
  "ark-ff 0.6.0",
  "ark-serialize 0.6.0",
  "blake3",
- "blueprint-crypto",
- "blueprint-std",
+ "blueprint-crypto 0.2.0-alpha.11",
+ "blueprint-std 0.2.0-alpha.7",
+ "ed25519-zebra",
+ "hex",
+ "k256",
+ "parking_lot",
+ "ripemd 0.2.0",
+ "rust-bls-bn254",
+ "schnorrkel",
+ "serde",
+ "serde_bytes",
+ "serde_json",
+ "spin",
+ "thiserror 2.0.20",
+ "tnt-bls",
+ "tokio",
+ "zeroize",
+]
+
+[[package]]
+name = "blueprint-keystore"
+version = "0.2.0-alpha.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "669ba0e34e178f114b9bee777ebb19230b42cb6b1a7ec0f73ebcd7511a64499f"
+dependencies = [
+ "alloy-primitives",
+ "ark-serialize 0.6.0",
+ "blake3",
+ "blueprint-crypto 0.2.0-alpha.12",
+ "blueprint-std 0.2.0-alpha.8",
  "ed25519-zebra",
  "hex",
  "k256",
@@ -2514,8 +2865,8 @@ dependencies = [
  "alloy-primitives",
  "bincode",
  "blueprint-core",
- "blueprint-crypto",
- "blueprint-std",
+ "blueprint-crypto 0.2.0-alpha.11",
+ "blueprint-std 0.2.0-alpha.7",
  "crossbeam-channel",
  "dashmap",
  "futures",
@@ -2546,19 +2897,19 @@ name = "blueprint-qos"
 version = "0.2.0-alpha.20"
 source = "git+https://github.com/tangle-network/blueprint?rev=1159090e224e9c3c7a83f896300472d3196a5073#1159090e224e9c3c7a83f896300472d3196a5073"
 dependencies = [
- "alloy-network",
+ "alloy-network 1.8.3",
  "alloy-primitives",
  "alloy-provider",
  "alloy-rpc-types",
- "alloy-signer-local",
+ "alloy-signer-local 1.8.3",
  "alloy-sol-types",
  "alloy-transport 1.8.3",
  "async-trait",
  "axum 0.8.9",
  "blueprint-core",
- "blueprint-crypto",
- "blueprint-keystore",
- "blueprint-std",
+ "blueprint-crypto 0.2.0-alpha.11",
+ "blueprint-keystore 0.2.0-alpha.14",
+ "blueprint-std 0.2.0-alpha.7",
  "bollard",
  "futures",
  "k256",
@@ -2608,18 +2959,18 @@ source = "git+https://github.com/tangle-network/blueprint?rev=1159090e224e9c3c7a
 dependencies = [
  "alloy-primitives",
  "alloy-provider",
- "alloy-signer",
- "alloy-signer-local",
+ "alloy-signer 1.8.3",
+ "alloy-signer-local 1.8.3",
  "async-trait",
  "blueprint-client-tangle",
  "blueprint-core",
- "blueprint-crypto",
+ "blueprint-crypto 0.2.0-alpha.11",
  "blueprint-evm-extra",
- "blueprint-keystore",
+ "blueprint-keystore 0.2.0-alpha.14",
  "blueprint-manager-bridge",
  "blueprint-qos",
  "blueprint-router",
- "blueprint-std",
+ "blueprint-std 0.2.0-alpha.7",
  "blueprint-tee",
  "clap",
  "document-features",
@@ -2649,16 +3000,16 @@ dependencies = [
  "blueprint-context-derive",
  "blueprint-contexts",
  "blueprint-core",
- "blueprint-crypto",
+ "blueprint-crypto 0.2.0-alpha.11",
  "blueprint-evm-extra",
- "blueprint-keystore",
+ "blueprint-keystore 0.2.0-alpha.14",
  "blueprint-macros",
  "blueprint-manager-bridge",
  "blueprint-producers-extra",
  "blueprint-qos",
  "blueprint-router",
  "blueprint-runner",
- "blueprint-std",
+ "blueprint-std 0.2.0-alpha.7",
  "blueprint-tangle-extra",
  "blueprint-tee",
  "blueprint-testing-utils",
@@ -2679,6 +3030,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "blueprint-std"
+version = "0.2.0-alpha.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6a0faa2f53ddf7031b699bc89cd5f4152185d9cebafdad413a525139143154b0"
+dependencies = [
+ "num-traits",
+ "rand 0.10.2",
+ "rand_core 0.6.4",
+ "thiserror 2.0.20",
+]
+
+[[package]]
 name = "blueprint-tangle-extra"
 version = "0.2.0-alpha.16"
 source = "git+https://github.com/tangle-network/blueprint?rev=1159090e224e9c3c7a83f896300472d3196a5073#1159090e224e9c3c7a83f896300472d3196a5073"
@@ -2689,9 +3052,9 @@ dependencies = [
  "alloy-sol-types",
  "blueprint-client-tangle",
  "blueprint-core",
- "blueprint-crypto",
- "blueprint-keystore",
- "blueprint-std",
+ "blueprint-crypto 0.2.0-alpha.11",
+ "blueprint-keystore 0.2.0-alpha.14",
+ "blueprint-std 0.2.0-alpha.7",
  "bytes",
  "futures-core",
  "futures-util",
@@ -2708,7 +3071,7 @@ version = "0.2.0-alpha.10"
 source = "git+https://github.com/tangle-network/blueprint?rev=1159090e224e9c3c7a83f896300472d3196a5073#1159090e224e9c3c7a83f896300472d3196a5073"
 dependencies = [
  "blueprint-core",
- "blueprint-std",
+ "blueprint-std 0.2.0-alpha.7",
  "chacha20poly1305",
  "document-features",
  "futures",
@@ -4660,7 +5023,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.5.10",
+ "socket2 0.6.5",
  "tokio",
  "tower-service",
  "tracing",
@@ -5807,6 +6170,7 @@ dependencies = [
  "anyhow",
  "axum 0.7.9",
  "blueprint-anvil-testing-utils",
+ "blueprint-keystore 0.2.0-alpha.15",
  "blueprint-sdk",
  "bytes",
  "config",
@@ -7173,7 +7537,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash 2.1.3",
  "rustls",
- "socket2 0.5.10",
+ "socket2 0.6.5",
  "thiserror 2.0.20",
  "tokio",
  "tracing",
@@ -7212,7 +7576,7 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2 0.5.10",
+ "socket2 0.6.5",
  "tracing",
  "windows-sys 0.61.2",
 ]

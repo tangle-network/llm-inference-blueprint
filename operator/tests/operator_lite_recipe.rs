@@ -130,3 +130,92 @@ while not os.path.exists(sys.argv[3]) and os.getppid() == parent: server.handle_
     assert!(argv.iter().any(|arg| arg == "--enable-cache-report"));
     Ok(())
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn private_operator_requires_selected_sdk_key() -> anyhow::Result<()> {
+    use blueprint_keystore::{
+        backends::Backend,
+        crypto::{k256::K256Ecdsa, BytesEncoding},
+        Keystore, KeystoreConfig,
+    };
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir()?;
+    let keys = dir.path().join("keys");
+    std::fs::create_dir(&keys)?;
+    std::fs::set_permissions(&keys, std::fs::Permissions::from_mode(0o700))?;
+    let store = Keystore::new(KeystoreConfig::new().fs_root(&keys))?;
+    let public = store.generate::<K256Ecdsa>(None)?;
+    let token = hex::encode(store.get_secret::<K256Ecdsa>(&public)?.to_bytes());
+    let port = free_port();
+    let mut config: Value = serde_json::from_str(include_str!("../../deploy/config.example.json"))?;
+    config["vllm"]["external"] = json!(true);
+    config["server"]["host"] = json!("127.0.0.1");
+    config["server"]["port"] = json!(port);
+    config["server"]["endpoint_key"] =
+        json!({"path":keys,"public_key":hex::encode(public.to_bytes())});
+    config["billing"]["billing_required"] = json!(false);
+    config["billing"]["payment_rails"] = json!({"shielded":false,"direct":false});
+    config["billing"]["nonce_store_path"] = json!(dir.path().join("nonces.json"));
+    let path = dir.path().join("config.json");
+    std::fs::write(&path, serde_json::to_vec(&config)?)?;
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+    let mut operator = tokio::process::Command::new(env!("CARGO_BIN_EXE_operator-lite"))
+        .arg(&path)
+        .current_dir(dir.path())
+        .env_clear()
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
+        .spawn()?;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(1))
+        .build()?;
+    let url = format!("http://127.0.0.1:{port}");
+    let result = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if client.get(format!("{url}/v1/models")).send().await.is_ok() {
+                break;
+            }
+            anyhow::ensure!(
+                operator.try_wait()?.is_none(),
+                "private operator exited before binding"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let mut refused = Vec::new();
+        for route in ["/v1/models", "/health", "/metrics", "/v1/chat/completions"] {
+            let request = if route.ends_with("completions") {
+                client
+                    .post(format!("{url}{route}"))
+                    .json(&json!({"messages":[{"role":"user","content":"Hello"}]}))
+            } else {
+                client.get(format!("{url}{route}"))
+            };
+            refused.push((route, request.send().await?.status()));
+        }
+        let wrong = client
+            .get(format!("{url}/v1/models"))
+            .bearer_auth("invalid")
+            .send()
+            .await?
+            .status();
+        let valid = client
+            .get(format!("{url}/v1/models"))
+            .bearer_auth(&token)
+            .send()
+            .await?
+            .status();
+        Ok::<_, anyhow::Error>((refused, wrong, valid))
+    })
+    .await;
+    operator.kill().await?;
+    operator.wait().await?;
+    let (refused, wrong, valid) = result??;
+    for (route, status) in refused {
+        assert_eq!(status, 401, "unauthenticated {route}");
+    }
+    assert_eq!(wrong, 401);
+    assert_eq!(valid, 200);
+    Ok(())
+}
