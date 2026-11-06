@@ -153,7 +153,7 @@ async fn private_operator_requires_selected_sdk_key() -> anyhow::Result<()> {
     config["server"]["host"] = json!("127.0.0.1");
     config["server"]["port"] = json!(port);
     config["server"]["endpoint_key"] =
-        json!({"path":keys,"public_key":hex::encode(public.to_bytes())});
+        json!({"kind":"secret-ref","key":hex::encode(public.to_bytes()),"format":"bearer"});
     config["billing"]["billing_required"] = json!(false);
     config["billing"]["payment_rails"] = json!({"shielded":false,"direct":false});
     config["billing"]["nonce_store_path"] = json!(dir.path().join("nonces.json"));
@@ -164,6 +164,7 @@ async fn private_operator_requires_selected_sdk_key() -> anyhow::Result<()> {
         .arg(&path)
         .current_dir(dir.path())
         .env_clear()
+        .env("KEYSTORE_URI", &keys)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .kill_on_drop(true)
