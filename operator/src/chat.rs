@@ -52,22 +52,34 @@ impl ChatClient {
         }
     }
     fn build_vllm_body(&self, req: &ChatCompletionRequest, stream: bool) -> serde_json::Value {
-        let mut body = serde_json::json!({
-            "model": req.model.as_deref().unwrap_or(&self.config.vllm.model),
-            "messages": req.messages,
-            "max_tokens": req.max_tokens,
-            "temperature": req.temperature,
-            "stream": stream,
-            "top_p": req.top_p,
-            "frequency_penalty": req.frequency_penalty,
-            "presence_penalty": req.presence_penalty,
-            "stop": req.stop,
-        });
+        let mut body = req.options.clone();
+        body.extend(
+            serde_json::json!({
+                "model": req.model.as_deref().unwrap_or(&self.config.vllm.model),
+                "messages": req.messages,
+                "max_tokens": req.max_tokens,
+                "temperature": req.temperature,
+                "stream": stream,
+                "top_p": req.top_p,
+                "frequency_penalty": req.frequency_penalty,
+                "presence_penalty": req.presence_penalty,
+                "stop": req.stop,
+            })
+            .as_object()
+            .expect("chat request object")
+            .clone(),
+        );
         // When streaming, request usage in the final chunk
         if stream {
-            body["stream_options"] = serde_json::json!({"include_usage": true});
+            let mut options = body
+                .get("stream_options")
+                .and_then(|value| value.as_object())
+                .cloned()
+                .unwrap_or_default();
+            options.insert("include_usage".into(), serde_json::json!(true));
+            body.insert("stream_options".into(), serde_json::Value::Object(options));
         }
-        body
+        serde_json::Value::Object(body)
     }
     /// Proxy a non-streaming chat completion request to vLLM.
     pub async fn chat_completion(

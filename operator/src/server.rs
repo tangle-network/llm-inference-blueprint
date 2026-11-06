@@ -210,11 +210,16 @@ pub struct ChatCompletionRequest {
     /// enabled); ignored when the operator runs shielded-only.
     #[serde(default)]
     pub payment: Option<PaymentProof>,
+    #[serde(flatten)]
+    pub options: serde_json::Map<String, serde_json::Value>,
 }
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ChatMessage {
     pub role: String,
-    pub content: String,
+    #[serde(default)]
+    pub content: serde_json::Value,
+    #[serde(flatten)]
+    pub extensions: serde_json::Map<String, serde_json::Value>,
 }
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ChatCompletionResponse {
@@ -224,12 +229,16 @@ pub struct ChatCompletionResponse {
     pub model: String,
     pub choices: Vec<Choice>,
     pub usage: Usage,
+    #[serde(flatten)]
+    pub extensions: serde_json::Map<String, serde_json::Value>,
 }
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Choice {
     pub index: u32,
     pub message: ChatMessage,
     pub finish_reason: String,
+    #[serde(flatten)]
+    pub extensions: serde_json::Map<String, serde_json::Value>,
 }
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Usage {
@@ -244,6 +253,7 @@ struct ModelInfo {
     id: String,
     object: String,
     owned_by: String,
+    context_length: u32,
 }
 #[derive(Debug, Serialize)]
 struct ModelList {
@@ -269,6 +279,16 @@ async fn chat_completions(
 ) -> Response {
     let backend = backend_from(&state);
     let model_name = req.model.as_deref().unwrap_or(&backend.config.vllm.model);
+    if model_name != backend.config.vllm.model
+        && backend.config.vllm.provider_for(model_name).is_none()
+    {
+        return error_response(
+            StatusCode::NOT_FOUND,
+            "Unknown model.".into(),
+            "invalid_request_error",
+            "model_not_found",
+        );
+    }
     let metrics_guard = RequestGuard::new(model_name);
     // 1. Acquire semaphore permit
     let permit: OwnedSemaphorePermit = match state.semaphore.clone().try_acquire_owned() {
@@ -303,7 +323,7 @@ async fn chat_completions(
         let estimated_prompt_tokens: u32 = req
             .messages
             .iter()
-            .map(|m| (m.content.len() as u32) / 4 + 1)
+            .map(|m| (m.content.to_string().len() as u32) / 4 + 1)
             .sum();
         let estimated_max_cost = backend.calculate_cost(estimated_prompt_tokens, req.max_tokens);
         match authorize_request(&state, proof, estimated_max_cost, backend.vllm.is_healthy()).await
@@ -558,6 +578,7 @@ async fn list_models(State(state): State<AppState>) -> Json<ModelList> {
         id: backend.config.vllm.model.clone(),
         object: "model".to_string(),
         owned_by: "operator".to_string(),
+        context_length: backend.config.vllm.max_model_len,
     }];
     for provider in &backend.config.vllm.providers {
         for model in &provider.models {
@@ -568,6 +589,7 @@ async fn list_models(State(state): State<AppState>) -> Json<ModelList> {
                 id: model.clone(),
                 object: "model".to_string(),
                 owned_by: provider.name.clone(),
+                context_length: backend.config.vllm.max_model_len,
             });
         }
     }
