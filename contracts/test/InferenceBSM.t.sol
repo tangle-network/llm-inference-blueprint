@@ -6,39 +6,11 @@ import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.s
 import {InferenceBSM} from "../src/InferenceBSM.sol";
 import {BlueprintServiceManagerBase} from "tnt-core/BlueprintServiceManagerBase.sol";
 
-contract MockPaymentToken {
-    mapping(address => uint256) public balanceOf;
-    mapping(address => mapping(address => uint256)) public allowance;
 
-    function mint(address to, uint256 amount) external {
-        balanceOf[to] += amount;
-    }
-
-    function approve(address spender, uint256 amount) external returns (bool) {
-        allowance[msg.sender][spender] = amount;
-        return true;
-    }
-
-    function transferFrom(address from, address to, uint256 amount) external returns (bool) {
-        require(balanceOf[from] >= amount, "insufficient");
-        require(allowance[from][msg.sender] >= amount, "no allowance");
-        balanceOf[from] -= amount;
-        balanceOf[to] += amount;
-        allowance[from][msg.sender] -= amount;
-        return true;
-    }
-
-    function transfer(address to, uint256 amount) external returns (bool) {
-        require(balanceOf[msg.sender] >= amount, "insufficient");
-        balanceOf[msg.sender] -= amount;
-        balanceOf[to] += amount;
-        return true;
-    }
-}
 
 contract InferenceBSMTest is Test {
     InferenceBSM public bsm;
-    MockPaymentToken public paymentToken;
+    address public paymentToken;
 
     address public tangleCore = address(0xC0DE);
     address public owner = address(0xBEEF);
@@ -47,7 +19,7 @@ contract InferenceBSMTest is Test {
     address public user = address(0x3333);
 
     function setUp() public {
-        paymentToken = new MockPaymentToken();
+        paymentToken = address(0xD00D);
 
         // Deploy implementation + proxy
         InferenceBSM impl = new InferenceBSM();
