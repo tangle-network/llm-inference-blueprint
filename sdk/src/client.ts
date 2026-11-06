@@ -39,10 +39,8 @@ function estimateInputTokens(messages: ChatMessage[]): number {
 /**
  * Inference client for the vLLM blueprint with ShieldedCredits billing.
  *
- * The signer is injected (see SpendAuthSigner), so the same client works with
- * a local ephemeral key, wagmi, or the Tangle parent bridge. Reads (chat,
- * models, health) hit the operator directly over HTTP; the only on-chain
- * dependency is an optional `PublicClient` for syncing the spend nonce.
+ * Uses an ephemeral signer from createLocalSpendSigner. An optional
+ * PublicClient synchronizes the on-chain spend nonce.
  */
 export function createInferenceClient(config: InferenceClientConfig) {
   const fetchImpl = config.fetchImpl ?? globalThis.fetch.bind(globalThis);

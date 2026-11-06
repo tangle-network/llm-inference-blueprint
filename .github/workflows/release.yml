@@ -9,36 +9,201 @@ on:
         required: true
 permissions:
   contents: write
-env:
-  TARGET: x86_64-unknown-linux-gnu
+  packages: write
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+defaults:
+  run:
+    shell: bash
 jobs:
-  release:
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
+  sdk:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions: { contents: read }
+    outputs:
+      version: ${{ steps.archive.outputs.version }}
+      sha1: ${{ steps.archive.outputs.sha1 }}
+      sha256: ${{ steps.archive.outputs.sha256 }}
+      artifact: ${{ steps.upload.outputs.artifact-id }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tag || github.ref }}
-      - name: Build operators
+          ref: refs/tags/${{ inputs.tag || github.ref_name }}
+          persist-credentials: false
+      - name: Require merged SDK release source
         run: |
-          docker build --platform linux/amd64 --target builder -f operator/Dockerfile -t operator-release .
-          mkdir -p target/release
-          docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/target/release:/export" operator-release sh -c 'cp /out/* /export/'
-      - name: Package operators
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          git merge-base --is-ancestor HEAD origin/main
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413
+        with: { package_json_file: sdk/package.json }
+      - &sdk-node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with: { node-version: 24.22.1 }
+      - name: Checkout maintained archive admission
+        uses: actions/checkout@v4
+        with:
+          repository: tangle-network/agent-runtime
+          ref: efa8fd11ca7f20b809ad8a5e199752677e3598ff
+          path: sdk/.release-policy
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            scripts/check-version-bump.mjs
+            scripts/check-api-surface.mjs
+            scripts/lib/api-surface.mjs
+          persist-credentials: false
+      - name: Qualify exact SDK archive
+        id: archive
         run: |
-          for binary in llm-operator operator-lite; do
-            strip "target/release/$binary"
-            archive="$binary-$TARGET.tar.xz"
-            tar -cJf "$archive" -C target/release "$binary"
-            sha256sum "$archive" > "$archive.sha256"
-            (cd target/release && sha256sum "$binary") > "$binary.sha256"
-            cut -d' ' -f1 "$binary.sha256" > "$binary-$TARGET.bin.sha256"
-          done
-      - name: Publish GitHub Release
+          pnpm --dir sdk install --frozen-lockfile
+          pnpm --dir sdk typecheck
+          pnpm --dir sdk build
+          pnpm --dir sdk test
+          mkdir -p "$RUNNER_TEMP/sdk-package" "$RUNNER_TEMP/sdk-consumer"
+          pnpm --dir sdk pack --pack-destination "$RUNNER_TEMP/sdk-package"
+          archive=$(python3 -c 'from pathlib import Path; import os; print(next((Path(os.environ["RUNNER_TEMP"])/"sdk-package").glob("*.tgz")))')
+          node sdk/.release-policy/scripts/check-version-bump.mjs --archive "$archive"
+          printf '{"private":true,"type":"module"}\n' > "$RUNNER_TEMP/sdk-consumer/package.json"
+          viem=$(node -p 'require("./sdk/package.json").devDependencies.viem')
+          pnpm --dir "$RUNNER_TEMP/sdk-consumer" add "$archive" "viem@$viem"
+          node sdk/scripts/onchain-e2e.mjs --http-peer "$RUNNER_TEMP/sdk-consumer/node_modules/@tangle-network/llm-inference-sdk/dist/index.js"
+          mv "$archive" "$RUNNER_TEMP/sdk-package/sdk.tgz"
+          echo "version=$(node -p 'require("./sdk/package.json").version')" >> "$GITHUB_OUTPUT"
+          echo "sha1=$(sha1sum "$RUNNER_TEMP/sdk-package/sdk.tgz" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          echo "sha256=$(sha256sum "$RUNNER_TEMP/sdk-package/sdk.tgz" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        id: upload
+        with:
+          name: llm-inference-sdk-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/sdk-package/sdk.tgz
+          if-no-files-found: error
+          retention-days: 1
+  publish-sdk:
+    needs: [sdk, release]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions: { contents: read, id-token: write }
+    concurrency:
+      group: npm-llm-inference-sdk
+      cancel-in-progress: false
+      queue: max
+    steps:
+      - *sdk-node
+      - name: Checkout maintained npm publisher
+        uses: actions/checkout@v4
+        with:
+          repository: tangle-network/tcloud
+          ref: 78a7299d27f3904eda8b18787d69be0dce1a8a2f
+          path: .release-tooling/tcloud
+          sparse-checkout-cone-mode: false
+          sparse-checkout: scripts/npm-release.mjs
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          artifact-ids: ${{ needs.sdk.outputs.artifact }}
+          merge-multiple: true
+          path: ${{ runner.temp }}/sdk-package
+      - name: Publish SDK with tcloud
+        env:
+          TARBALL_PATH: ${{ runner.temp }}/sdk-package/sdk.tgz
+          EXPECTED_NAME: '@tangle-network/llm-inference-sdk'
+          EXPECTED_VERSION: ${{ needs.sdk.outputs.version }}
+          EXPECTED_SHA1: ${{ needs.sdk.outputs.sha1 }}
+          EXPECTED_SHA256: ${{ needs.sdk.outputs.sha256 }}
+          ALLOW_PUBLISH: 'true'
+        run: |
+          printf '%s  %s\n' "$EXPECTED_SHA256" "$TARBALL_PATH" | sha256sum --check --status
+          node .release-tooling/tcloud/scripts/npm-release.mjs
+  release:
+    needs: sdk
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ inputs.tag || github.ref_name }}
+          persist-credentials: false
+      - name: System dependencies
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler libssl-dev pkg-config clang cmake
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-dist
+        run: |
+          DIST_VERSION=$(python3 -c 'import tomllib; print(tomllib.load(open("dist-workspace.toml", "rb"))["dist"]["cargo-dist-version"])')
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location "https://github.com/astral-sh/cargo-dist/releases/download/v$DIST_VERSION/cargo-dist-installer.sh" | sh
+      - name: Build native release artifacts
+        run: |
+          cargo fetch --locked
+          CARGO_NET_OFFLINE=true dist build --tag "$TAG" --artifacts=all --output-format=json > "$RUNNER_TEMP/dist-manifest.json"
+          git diff --exit-code -- Cargo.lock
+      - name: Qualify operator-lite serving image
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          CORE_REVISION=$(python3 -c 'import tomllib; print(tomllib.load(open("operator/Cargo.toml", "rb"))["dependencies"]["tangle-inference-core"]["rev"])')
+          [[ "$CORE_REVISION" =~ ^[a-f0-9]{40}$ ]]
+          curl --fail --silent --show-error --location "https://raw.githubusercontent.com/tangle-network/tangle-inference-core/$CORE_REVISION/engine-profiles.json" -o "$RUNNER_TEMP/engine-profiles.json"
+          ENGINE_IMAGE=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["image"])' "$RUNNER_TEMP/engine-profiles.json")
+          [[ "$ENGINE_IMAGE" =~ @sha256:[a-f0-9]{64}$ ]]
+          export CORE_REVISION ENGINE_IMAGE
+          COMMIT=$(git rev-parse HEAD)
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}/operator-lite"
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          if gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern operator-lite-image.txt --dir "$RUNNER_TEMP/prior-image"; then
+            PRIOR_IMAGE=$(python3 - "$RUNNER_TEMP/prior-image/operator-lite-image.txt" "$IMAGE" <<'RECEIPT'
+          import re, sys
+          with open(sys.argv[1], "rb") as source:
+              receipt = source.read(4096)
+          if re.fullmatch(re.escape(sys.argv[2].encode()) + rb"@sha256:[a-f0-9]{64}\n?", receipt) is None:
+              raise SystemExit("invalid serving image receipt")
+          sys.stdout.buffer.write(receipt.removesuffix(b"\n"))
+          RECEIPT
+            )
+            docker pull "$PRIOR_IMAGE"
+            docker tag "$PRIOR_IMAGE" qualified-operator-lite
+            cp "$RUNNER_TEMP/prior-image/operator-lite-image.txt" "$RUNNER_TEMP/operator-lite-image.txt"
+          else
+            docker build --platform linux/amd64 --target operator-lite -f operator/Dockerfile --build-arg ENGINE_IMAGE="$ENGINE_IMAGE" --build-arg VCS_REF="$COMMIT" --build-arg CORE_REVISION="$CORE_REVISION" -t qualified-operator-lite .
+          fi
+          docker image inspect qualified-operator-lite > "$RUNNER_TEMP/operator-lite-image.json"
+          python3 - <<'VERIFY'
+          import json, os, subprocess
+          image = json.load(open(os.environ["RUNNER_TEMP"] + "/operator-lite-image.json"))[0]["Config"]
+          assert image["Entrypoint"] == ["/usr/local/bin/operator-lite"]
+          assert image["Cmd"] in (None, []) and image["User"] == "operator"
+          labels = image["Labels"]
+          assert labels["org.opencontainers.image.revision"] == subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+          assert labels["org.opencontainers.image.base.name"] == os.environ["ENGINE_IMAGE"]
+          assert labels["tools.tangle.inference-core.revision"] == os.environ["CORE_REVISION"]
+          VERIFY
+          docker run --rm --entrypoint sh qualified-operator-lite -ec 'test "$(id -u)" != 0; ldd /usr/local/bin/operator-lite | tee /tmp/ldd; ! grep -q "not found" /tmp/ldd; python3 -c "import sglang.launch_server"'
+      - name: Publish GitHub Release and serving image
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 ||
-            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "$TAG" --generate-notes
-          gh release upload "$TAG" ./*.tar.xz ./*.sha256 --repo "$GITHUB_REPOSITORY" --clobber
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "$TAG" --generate-notes --draft
+          UPLOAD_FILES=$(jq -er '.upload_files[]' "$RUNNER_TEMP/dist-manifest.json")
+          mapfile -t FILES <<< "$UPLOAD_FILES"
+          FILES+=("$RUNNER_TEMP/dist-manifest.json" "$RUNNER_TEMP/operator-lite-image.txt")
+          ASSETS=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')
+          for file in "${FILES[@]}"; do
+            name=$(basename "$file")
+            if grep -qxF "$name" <<< "$ASSETS"; then
+              gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern "$name" --dir "$RUNNER_TEMP/prior-release"
+              cmp "$RUNNER_TEMP/prior-release/$name" "$file"
+            fi
+          done
+          if ! test -s "$RUNNER_TEMP/operator-lite-image.txt"; then
+            IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}/operator-lite"
+            COMMIT=$(git rev-parse HEAD)
+            docker tag qualified-operator-lite "$IMAGE:sha-$COMMIT"
+            docker tag qualified-operator-lite "$IMAGE:$TAG"
+            docker push "$IMAGE:sha-$COMMIT"
+            docker push "$IMAGE:$TAG"
+            docker image inspect --format '{{index .RepoDigests 0}}' "$IMAGE:sha-$COMMIT" > "$RUNNER_TEMP/operator-lite-image.txt"
+            grep -Eq '^ghcr.io/.+@sha256:[a-f0-9]{64}$' "$RUNNER_TEMP/operator-lite-image.txt"
+          fi
+          gh release upload "$TAG" "${FILES[@]}" --repo "$GITHUB_REPOSITORY" --clobber
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false

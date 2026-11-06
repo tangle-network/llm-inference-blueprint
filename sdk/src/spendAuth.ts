@@ -1,28 +1,9 @@
+import { signSpendAuth as signTcloudSpendAuth } from "@tangle-network/tcloud/shielded";
 import { privateKeyToAccount } from "viem/accounts";
 import type { Address, Hex } from "viem";
+import type { SpendAuth, SpendAuthPayload } from "./types";
 
-import { buildSpendAuthTypedData } from "./eip712";
-import type { SpendAuth, SpendAuthPayload, SpendAuthSigner } from "./types";
-
-/**
- * A local, in-memory SpendAuth signer backed by an ephemeral spending key.
- *
- * In the thin-iframe model this is the common case: the spending key lives
- * client-side, so per-request authorizations are signed locally with zero
- * wallet round-trips. (Funding the account is the only step that touches the
- * user's real wallet — see funding.ts.)
- */
-export function createLocalSpendSigner(spendingKeyPrivate: Hex): SpendAuthSigner {
-  const account = privateKeyToAccount(spendingKeyPrivate);
-  return {
-    account: account.address,
-    signTypedData: (typedData) => account.signTypedData(typedData),
-  };
-}
-
-/** Sign a SpendAuthorization with the given signer. */
-export async function signSpendAuth(params: {
-  signer: SpendAuthSigner;
+type Authorization = {
   chainId: number;
   shieldedCreditsAddress: Address;
   commitment: Hex;
@@ -32,46 +13,44 @@ export async function signSpendAuth(params: {
   nonce: bigint;
   jobIndex?: number;
   expiry: bigint;
-}): Promise<SpendAuth> {
-  const jobIndex = params.jobIndex ?? 0;
-  const typedData = buildSpendAuthTypedData({
-    chainId: params.chainId,
-    shieldedCreditsAddress: params.shieldedCreditsAddress,
-    commitment: params.commitment,
-    serviceId: params.serviceId,
-    jobIndex,
-    amount: params.amount,
-    operator: params.operator,
-    nonce: params.nonce,
-    expiry: params.expiry,
-  });
-  const signature = await params.signer.signTypedData(typedData);
-  return {
-    commitment: params.commitment,
-    serviceId: params.serviceId,
-    jobIndex,
-    amount: params.amount,
-    operator: params.operator,
-    nonce: params.nonce,
-    expiry: params.expiry,
-    signature,
-  };
+};
+
+class LocalSpendSigner {
+  readonly account: Address;
+  #privateKey: Hex;
+
+  constructor(privateKey: Hex) {
+    this.#privateKey = privateKey;
+    this.account = privateKeyToAccount(privateKey).address;
+  }
+
+  async sign(params: Authorization): Promise<SpendAuth> {
+    const jobIndex = params.jobIndex ?? 0;
+    const { signature } = await signTcloudSpendAuth(
+      { privateKey: this.#privateKey, commitment: params.commitment },
+      { chainId: params.chainId, creditsAddress: params.shieldedCreditsAddress,
+        serviceId: params.serviceId, jobIndex, operator: params.operator,
+        amount: params.amount, nonce: params.nonce, expiry: params.expiry },
+    );
+    return { commitment: params.commitment, serviceId: params.serviceId, jobIndex,
+      operator: params.operator, amount: params.amount, nonce: params.nonce,
+      expiry: params.expiry, signature };
+  }
 }
 
-/**
- * Convert a signed SpendAuth into the operator's wire payload (camelCase,
- * bigints as strings). This is what the operator's `SpendAuthPayload`
- * deserializer expects in the body or `X-Payment-Signature` header.
- */
+/** Keep the ephemeral key inside the factory's opaque handle. */
+export function createLocalSpendSigner(spendingKeyPrivate: Hex) {
+  return new LocalSpendSigner(spendingKeyPrivate);
+}
+
+export function signSpendAuth(params: Authorization & { signer: LocalSpendSigner }): Promise<SpendAuth> {
+  return params.signer.sign(params);
+}
+
 export function toSpendAuthPayload(auth: SpendAuth): SpendAuthPayload {
   return {
-    commitment: auth.commitment,
-    serviceId: Number(auth.serviceId),
-    jobIndex: auth.jobIndex,
-    amount: auth.amount.toString(),
-    operator: auth.operator,
-    nonce: Number(auth.nonce),
-    expiry: Number(auth.expiry),
-    signature: auth.signature,
+    commitment: auth.commitment, serviceId: auth.serviceId.toString(), jobIndex: auth.jobIndex,
+    amount: auth.amount.toString(), operator: auth.operator, nonce: auth.nonce.toString(),
+    expiry: auth.expiry.toString(), signature: auth.signature,
   };
 }

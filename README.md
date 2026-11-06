@@ -37,10 +37,12 @@ Single model per instance. Dependency versions are owned by [operator/Cargo.toml
 
 Merge `origin/main` before qualifying source changes. Run the affected integration surface before merge through the admitted launcher. The comprehensive reference below retains the former branch checks; workflow and documentation-only changes use YAML, content, link and diff checks.
 
+HTTP-only checks use `cargo test --no-default-features --test server_tests`. The comprehensive gate enables `--all-features`, including `chain-tests` for the actual Anvil job flow.
+
 Provision Rust with rustfmt/clippy, protoc, Foundry and cargo-audit through the maintained host toolchain. The launcher does not provision these Rust/contract prerequisites.
 
 ```bash
-beelink-gate auto https://github.com/tangle-network/llm-inference-blueprint.git <full-sha> -- bash -lc 'cargo fmt --all -- --check && cargo clippy --workspace -- -D warnings && cargo test --workspace && cargo audit --ignore RUSTSEC-2025-0055 && (cd contracts && forge soldeer update && forge build && forge test)'
+beelink-gate auto https://github.com/tangle-network/llm-inference-blueprint.git <full-sha> -- bash -lc 'cargo fmt --all -- --check && cargo clippy --workspace --all-features --all-targets -- -D warnings && cargo test --workspace --all-features && cargo audit --ignore RUSTSEC-2025-0055 && (cd contracts && forge soldeer update && forge build && forge test)'
 ```
 
 The audit exclusion is for the Blueprint dependency's disabled EigenLayer feature. Payment, streaming and chain changes retain the actual-server and on-chain integration requirements in [CLAUDE.md](CLAUDE.md#verification). Missing artifacts or an early-returning harness provide no integration result; a substituted backend does not prove real model output. Automatic PR/push CI is retired. This local gate does not authorize a deployment, model request or payment.
@@ -54,14 +56,14 @@ Set the required SDK RPC, blueprint, service and contract variables listed in
 [docker-compose.yml](docker-compose.yml), provision the operator keystore in its
 state volume (`--keystore-uri /home/operator/state/keystore`), then run
 `docker compose up --build operator` with the NVIDIA container runtime.
-`llm-operator` manages the engine; `operator-lite` connects to an existing
-OpenAI-compatible backend such as the GTR Ollama shim.
+`operator-lite` attaches to an existing OpenAI-compatible backend such as the GTR Ollama shim by default. To supervise SGLang, set `vllm.engine` to `sglang` and `vllm.external` to `false`. A derivative model sets `vllm.base_family` and `vllm.model`; select its arm, GPU class and tensor parallelism from the [core catalog](https://github.com/tangle-network/tangle-inference-core/blob/master/engine-profiles.json) at the commit pinned in `operator/Cargo.toml`. On-chain admission and pricing remain model rules in the BSM.
 
-Tagged releases publish both Linux binaries, archive checksums and extracted
-binary checksums through [Release](.github/workflows/release.yml).
-To install the GTR user service, download a chosen release, verify its archive
-with `sha256sum -c operator-lite-x86_64-unknown-linux-gnu.tar.xz.sha256`, extract
-it, then verify `sha256sum -c operator-lite.sha256`.
+`operator-lite` takes an optional configuration file as its first argument. Without one it reads `VLLM_OP_` environment variables, with `__` between nested fields, such as `VLLM_OP_SERVER__PORT`.
+
+Tagged releases use [cargo-dist](dist-workspace.toml) to publish a native archive
+containing both Linux binaries, its checksum and `dist-manifest.json`.
+To install the GTR user service, verify the chosen archive with
+`sha256sum -c llm-inference-x86_64-unknown-linux-gnu.tar.xz.sha256`, then extract it.
 Install the verified binary under `/opt/tangle-operator/releases/<tag>/` and
 atomically point `/opt/tangle-operator/current` at that directory. Retain the
 previous release for recovery. Install private config at
@@ -73,9 +75,22 @@ the systemd search path before replacing it. With `ollama-shim.service` running,
 wait for `/metrics` active requests to reach zero, then run
 `systemctl --user daemon-reload && systemctl --user enable --now gtr-operator`.
 For an upgrade, restart the service. Verify `/proc/<MainPID>/exe` against the
-release binary checksum, `/health`, `/v1/models` and a real routed completion.
+verified extracted binary, `/health`, `/v1/models` and a real routed completion.
 On failure, switch `current` to the retained release and restart, then repeat
 these checks. Never reset the nonce store during an upgrade or recovery.
+
+SDK archives are built, checked through the packed client, and admitted by agent-runtime before the native release runs. The same [release workflow](.github/workflows/release.yml) then publishes the exact SDK archive through tcloud's maintained publisher using npm OIDC. Package identity and version come from [sdk/package.json](sdk/package.json); the npm trusted publisher must bind this repository and `release.yml`. SDK publication and UI adoption are separate from native artifact publication.
+
+## Register a blueprint
+
+Deploy the manager with [Deploy.s.sol](contracts/script/Deploy.s.sol), `TANGLE_CORE` and `PAYMENT_TOKEN`
+and a Foundry keystore. Set its returned manager address in
+[definition.json](deploy/definition.json), then follow the
+[cargo-tangle deployment guide](https://github.com/tangle-network/blueprint#deploying-to-testnetmainnet)
+using the same wallet address in the SDK keystore. Use verified native artifact
+metadata from [Release](.github/workflows/release.yml). The CLI owns registration
+encoding and metadata hashing; `cargo tangle blueprint deploy tangle --help`
+lists its settings, RPC and artifact options.
 
 ## Live testnet registration
 

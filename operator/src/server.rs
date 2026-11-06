@@ -1,14 +1,6 @@
-//! OpenAI-compatible HTTP server for the vLLM operator.
-//!
-//! All shared infrastructure (nonce store, spend-auth validation, x402 headers,
-//! metrics, app state container) lives in `tangle-inference-core`. This module
-//! only contains:
-//!
-//! * `VllmBackend` — the backend attached to `AppState` via `AppStateBuilder`.
-//! * Request/response types for the OpenAI chat/completions wire format.
-//! * HTTP handlers that glue the shared billing flow to the vLLM subprocess.
+//! OpenAI HTTP adapter for the core serving engine and billing state.
+use crate::chat::ChatClient;
 use crate::config::OperatorConfig;
-use crate::vllm::VllmProcess;
 use axum::{
     body::Body,
     extract::{DefaultBodyLimit, State},
@@ -17,16 +9,16 @@ use axum::{
     routing::{get, post},
     Json, Router as HttpRouter,
 };
-use blueprint_sdk::std::sync::Arc;
-use blueprint_sdk::std::time::Duration;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::sync::Mutex;
+use std::time::Duration;
 use tangle_inference_core::payment::PaymentProof;
 use tangle_inference_core::server::{
-    authorize_request, error_response, payment_required, resolve_payment_proof, settle_request,
-    AuthorizedPayment,
+    authorize_request, backend_unavailable, error_response, metrics_handler, payment_required,
+    resolve_payment_proof, settle_request, AuthorizedPayment,
 };
 use tangle_inference_core::{
     detect_gpus, AppState, CostModel, CostParams, GpuInfo, PerTokenCostModel, RequestGuard,
@@ -37,15 +29,11 @@ use tokio::task::JoinHandle;
 use tower_http::cors::CorsLayer;
 use tower_http::timeout::TimeoutLayer;
 use tower_http::trace::TraceLayer;
-/// Backend attached to `AppState` via `AppStateBuilder::backend`. Handlers
-/// retrieve it via `state.backend::<VllmBackend>().unwrap()`.
-///
-/// Owns the vLLM subprocess handle, a reference to the full operator config
-/// (for vllm-specific knobs only — all shared knobs are already on AppState),
-/// and a pre-built per-token cost model.
+use unicode_normalization::UnicodeNormalization;
+/// Model configuration and request accounting attached to core application state.
 pub struct VllmBackend {
     pub config: Arc<OperatorConfig>,
-    pub vllm: Arc<VllmProcess>,
+    pub vllm: Arc<ChatClient>,
     pub cost_model: PerTokenCostModel,
     /// Handles of spawned settlement tasks, drained on shutdown.
     pub pending_settlements: Mutex<Vec<JoinHandle<()>>>,
@@ -74,7 +62,7 @@ impl UsageLedger {
     }
 }
 impl VllmBackend {
-    pub fn new(config: Arc<OperatorConfig>, vllm: Arc<VllmProcess>) -> Self {
+    pub fn new(config: Arc<OperatorConfig>, vllm: Arc<ChatClient>) -> Self {
         let cost_model = PerTokenCostModel {
             price_per_input_token: config.vllm.price_per_input_token,
             price_per_output_token: config.vllm.price_per_output_token,
@@ -99,22 +87,18 @@ impl VllmBackend {
             self.usage.completion_tokens.load(Ordering::Relaxed),
         )
     }
-    /// Register a spawned settlement task for shutdown drain.
     pub fn track_settlement(&self, handle: JoinHandle<()>) {
         if let Ok(mut handles) = self.pending_settlements.lock() {
-            // Prune completed handles to avoid unbounded growth.
             handles.retain(|h| !h.is_finished());
             handles.push(handle);
         }
     }
-    /// Drain all pending settlement handles, returning them for awaiting.
     pub fn drain_settlements(&self) -> Vec<JoinHandle<()>> {
         self.pending_settlements
             .lock()
             .map(|mut h| h.drain(..).collect())
             .unwrap_or_default()
     }
-    /// Calculate the cost for a request given token counts.
     pub fn calculate_cost(&self, prompt_tokens: u32, completion_tokens: u32) -> u64 {
         self.cost_model.calculate_cost(&CostParams {
             prompt_tokens,
@@ -147,10 +131,13 @@ pub async fn start(
         .layer(TimeoutLayer::new(Duration::from_secs(stream_timeout_secs)))
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            tangle_inference_core::server::authenticate_endpoint,
+        ))
         .with_state(state.clone());
     let listener = tokio::net::TcpListener::bind(&bind).await?;
     tracing::info!(bind = %bind, "HTTP server listening");
-    // Clone state so we can drain pending settlements after the server stops.
     let state_for_drain = state;
     let handle = tokio::spawn(async move {
         let shutdown_signal = async move {
@@ -163,7 +150,6 @@ pub async fn start(
         {
             tracing::error!(error = %e, "HTTP server error");
         }
-        // Drain pending settlement tasks before exiting.
         if let Some(backend) = state_for_drain.backend::<VllmBackend>() {
             let handles = backend.drain_settlements();
             if !handles.is_empty() {
@@ -181,7 +167,6 @@ pub async fn start(
     });
     Ok(handle)
 }
-// --- Request / Response types (OpenAI-compatible) ---
 #[derive(Debug, Deserialize)]
 pub struct ChatCompletionRequest {
     pub model: Option<String>,
@@ -203,18 +188,19 @@ pub struct ChatCompletionRequest {
     /// ShieldedCredits spend authorization (required when billing_required is true).
     /// Can also be provided via x402 headers (X-Payment-Signature).
     pub spend_auth: Option<SpendAuthPayload>,
-    /// Plain-crypto payment proof (the Direct rail): a `DirectTransfer` carrying
-    /// the tx hash of an ERC-20 transfer to the operator. An alternative to
-    /// `spend_auth` — pay-per-call in USDC with no shielded pool. Authorized
-    /// through the generic payment provider (accepted when the `direct` rail is
-    /// enabled); ignored when the operator runs shielded-only.
+    /// Core payment proof; accepted rails come from the billing configuration.
     #[serde(default)]
     pub payment: Option<PaymentProof>,
+    #[serde(flatten)]
+    pub options: serde_json::Map<String, serde_json::Value>,
 }
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ChatMessage {
     pub role: String,
-    pub content: String,
+    #[serde(default)]
+    pub content: serde_json::Value,
+    #[serde(flatten)]
+    pub extensions: serde_json::Map<String, serde_json::Value>,
 }
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ChatCompletionResponse {
@@ -224,12 +210,16 @@ pub struct ChatCompletionResponse {
     pub model: String,
     pub choices: Vec<Choice>,
     pub usage: Usage,
+    #[serde(flatten)]
+    pub extensions: serde_json::Map<String, serde_json::Value>,
 }
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Choice {
     pub index: u32,
     pub message: ChatMessage,
     pub finish_reason: String,
+    #[serde(flatten)]
+    pub extensions: serde_json::Map<String, serde_json::Value>,
 }
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Usage {
@@ -244,6 +234,7 @@ struct ModelInfo {
     id: String,
     object: String,
     owned_by: String,
+    context_length: u32,
 }
 #[derive(Debug, Serialize)]
 struct ModelList {
@@ -256,21 +247,67 @@ fn default_max_tokens() -> u32 {
 fn default_temperature() -> f32 {
     0.7
 }
-// --- Handlers ---
 fn backend_from(state: &AppState) -> &VllmBackend {
     state
         .backend::<VllmBackend>()
         .expect("AppState backend is VllmBackend (checked in server::start)")
 }
+fn blocked_minor_content(messages: &[ChatMessage]) -> bool {
+    use regex::Regex;
+    use std::sync::LazyLock;
+    static CHILD: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(
+        r"\b(?:minor|underage|preteen|prepubescent|child|children|toddler|infant|loli|shota)\b|\b(?:[0-9]|1[0-7])[ -]*(?:years?[ -]old|yo\b|y/o\b)"
+    ).expect("minor policy regex")
+    });
+    static SEXUAL: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(
+        r"\b(?:porn(?:ography|ographic)?|erotica|erotic|fetish|masturbat\w*)\b|(?:explicit|graphic)\s+(?:sex|sexual)|(?:sex|sexual|nude|naked)\s+(?:scene|story|image|photo|video|roleplay|fantasy|description|depiction)s?\b"
+    ).expect("sexual content policy regex")
+    });
+    static CSAM: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"\b(?:csam|child\s+porn\w*)\b").expect("CSAM policy regex"));
+    let text = serde_json::to_string(
+        &messages
+            .iter()
+            .filter(|message| message.role == "user")
+            .map(|message| &message.content)
+            .collect::<Vec<_>>(),
+    )
+    .expect("JSON message values serialize")
+    .nfkc()
+    .flat_map(char::to_lowercase)
+    .filter(|character| !matches!(character, '\u{200b}'..='\u{200f}' | '\u{feff}'))
+    .collect::<String>();
+    CSAM.is_match(&text) || CHILD.is_match(&text) && SEXUAL.is_match(&text)
+}
+
 async fn chat_completions(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(mut req): Json<ChatCompletionRequest>,
 ) -> Response {
+    if blocked_minor_content(&req.messages) {
+        return error_response(
+            StatusCode::FORBIDDEN,
+            "Sexual content involving minors is prohibited.".into(),
+            "invalid_request_error",
+            "content_policy_violation",
+        );
+    }
     let backend = backend_from(&state);
     let model_name = req.model.as_deref().unwrap_or(&backend.config.vllm.model);
+    if model_name != backend.config.vllm.model
+        && backend.config.vllm.provider_for(model_name).is_none()
+    {
+        return error_response(
+            StatusCode::NOT_FOUND,
+            "Unknown model.".into(),
+            "invalid_request_error",
+            "model_not_found",
+        );
+    }
     let metrics_guard = RequestGuard::new(model_name);
-    // 1. Acquire semaphore permit
     let permit: OwnedSemaphorePermit = match state.semaphore.clone().try_acquire_owned() {
         Ok(p) => p,
         Err(_) => {
@@ -281,6 +318,14 @@ async fn chat_completions(
                 "too_many_requests",
             );
         }
+    };
+    let cold_deadline = tokio::time::Instant::now() + Duration::from_secs(12);
+    let backend_ready = async {
+        // A configured remote provider owns its own health API; its HTTP response is checked below.
+        backend.config.vllm.provider_for(model_name).is_some()
+            || tokio::time::timeout_at(cold_deadline, backend.vllm.is_healthy())
+                .await
+                .unwrap_or(false)
     };
     // Resolve the payment proof (body payment | spend_auth | x402 header), then
     // gate -> authorize -> (after serving) settle through the shared, rail-
@@ -303,24 +348,44 @@ async fn chat_completions(
         let estimated_prompt_tokens: u32 = req
             .messages
             .iter()
-            .map(|m| (m.content.len() as u32) / 4 + 1)
+            .map(|m| (m.content.to_string().len() as u32) / 4 + 1)
             .sum();
         let estimated_max_cost = backend.calculate_cost(estimated_prompt_tokens, req.max_tokens);
-        match authorize_request(&state, proof, estimated_max_cost, backend.vllm.is_healthy()).await
-        {
+        match authorize_request(&state, proof, estimated_max_cost, backend_ready).await {
             Ok(a) => Some(a),
             Err(resp) => return resp,
         }
     } else {
+        if !backend_ready.await {
+            return backend_unavailable();
+        }
         None
     };
-    // Dispatch to streaming or non-streaming path.
     if req.stream {
-        handle_streaming(state, req, authorized, metrics_guard, permit).await
+        handle_streaming(state, req, authorized, metrics_guard, permit, cold_deadline).await
     } else {
         handle_non_streaming(state, req, authorized, metrics_guard, permit).await
     }
 }
+fn upstream_failure(error: &anyhow::Error) -> Response {
+    if let Some(error) = error.downcast_ref::<reqwest::Error>() {
+        if error.is_timeout()
+            || error.is_connect()
+            || error
+                .status()
+                .is_some_and(|status| matches!(status.as_u16(), 408 | 429 | 502 | 503 | 504))
+        {
+            return backend_unavailable();
+        }
+    }
+    error_response(
+        StatusCode::BAD_GATEWAY,
+        "Backend rejected the request.".into(),
+        "upstream_error",
+        "vllm_error",
+    )
+}
+
 async fn handle_non_streaming(
     state: AppState,
     req: ChatCompletionRequest,
@@ -331,15 +396,7 @@ async fn handle_non_streaming(
     let backend = backend_from(&state);
     let vllm_response = match backend.vllm.chat_completion(&req).await {
         Ok(r) => r,
-        Err(e) => {
-            tracing::error!(error = %e, "vLLM request failed");
-            return error_response(
-                StatusCode::BAD_GATEWAY,
-                format!("upstream vLLM error: {e}"),
-                "upstream_error",
-                "vllm_error",
-            );
-        }
+        Err(error) => return upstream_failure(&error),
     };
     metrics_guard.set_tokens(
         vllm_response.usage.prompt_tokens,
@@ -370,22 +427,99 @@ async fn handle_streaming(
     authorized: Option<AuthorizedPayment>,
     mut metrics_guard: RequestGuard,
     permit: OwnedSemaphorePermit,
+    cold_deadline: tokio::time::Instant,
 ) -> Response {
     let backend = backend_from(&state);
-    // Get the raw upstream SSE response as a byte stream
-    let upstream = match backend.vllm.chat_completion_stream(&req).await {
-        Ok(r) => r,
-        Err(e) => {
-            tracing::error!(error = %e, "vLLM streaming request failed");
-            return error_response(
+    let expected_model = req.model.as_deref().unwrap_or(&backend.config.vllm.model);
+    let opening = tokio::time::timeout_at(cold_deadline, async {
+        let upstream = backend
+            .vllm
+            .chat_completion_stream(&req)
+            .await
+            .map_err(|error| upstream_failure(&error))?;
+        if !upstream
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.contains("text/event-stream"))
+        {
+            return Err(error_response(
                 StatusCode::BAD_GATEWAY,
-                format!("upstream vLLM error: {e}"),
+                "Backend returned no event stream.".into(),
                 "upstream_error",
-                "vllm_error",
-            );
+                "invalid_backend_response",
+            ));
         }
+        let mut stream = Box::pin(upstream.bytes_stream());
+        let mut prefix = Vec::new();
+        let mut cursor = 0;
+        let mut finished = false;
+        let mut usage = false;
+        loop {
+            let chunk = stream
+                .next()
+                .await
+                .ok_or_else(backend_unavailable)?
+                .map_err(|_| backend_unavailable())?;
+            if prefix.len() + chunk.len() > state.server_config.max_line_buf_bytes {
+                return Err(backend_unavailable());
+            }
+            prefix.extend_from_slice(&chunk);
+            while let Some(end) = prefix[cursor..].iter().position(|byte| *byte == b'\n') {
+                let line = &prefix[cursor..cursor + end];
+                cursor += end + 1;
+                let Some(raw) = line.strip_prefix(b"data:") else {
+                    continue;
+                };
+                if raw.trim_ascii() == b"[DONE]" {
+                    continue;
+                }
+                let value: serde_json::Value =
+                    serde_json::from_slice(raw).map_err(|_| backend_unavailable())?;
+                if value
+                    .get("model")
+                    .and_then(|value| value.as_str())
+                    .is_some_and(|model| model != expected_model)
+                {
+                    return Err(error_response(
+                        StatusCode::BAD_GATEWAY,
+                        "Backend model identity changed.".into(),
+                        "upstream_error",
+                        "invalid_backend_response",
+                    ));
+                }
+                usage |= ["prompt_tokens", "completion_tokens"]
+                    .iter()
+                    .all(|key| value["usage"][*key].as_u64().is_some())
+                    && value["usage"]["prompt_tokens_details"]["cached_tokens"]
+                        .as_u64()
+                        .is_some();
+                let semantic = value["choices"].as_array().is_some_and(|choices| {
+                    choices.iter().any(|choice| {
+                        finished |= choice["finish_reason"]
+                            .as_str()
+                            .is_some_and(|reason| !reason.is_empty());
+                        let delta = &choice["delta"];
+                        ["content", "reasoning_content", "reasoning"]
+                            .iter()
+                            .any(|key| delta[*key].as_str().is_some_and(|text| !text.is_empty()))
+                            || delta["tool_calls"]
+                                .as_array()
+                                .is_some_and(|calls| !calls.is_empty())
+                    })
+                });
+                if semantic || finished && usage {
+                    return Ok((bytes::Bytes::from(prefix), stream));
+                }
+            }
+        }
+    });
+    let (prefix, stream) = match opening.await {
+        Ok(Ok(stream)) => stream,
+        Ok(Err(response)) => return response,
+        Err(_) => return backend_unavailable(),
     };
-    let byte_stream = upstream.bytes_stream();
+    let byte_stream = futures_util::stream::once(async move { Ok(prefix) }).chain(stream);
     // The authorization (with its per-account guard) moves into the settlement
     // task, so the account slot is held across the whole stream + settlement.
     let authorized_for_settlement = authorized;
@@ -393,94 +527,44 @@ async fn handle_streaming(
     let (usage_tx, usage_rx) = tokio::sync::oneshot::channel::<(u32, u32)>();
     let idle_timeout = Duration::from_secs(state.server_config.idle_chunk_timeout_secs);
     let max_line_buf = state.server_config.max_line_buf_bytes;
-    // Wrap the byte stream with a per-chunk idle timeout
-    let timed_stream = tokio_stream::StreamExt::timeout(
-        tokio_stream::wrappers::ReceiverStream::new({
-            let (tx, rx) = tokio::sync::mpsc::channel(32);
-            tokio::spawn(async move {
-                tokio::pin!(byte_stream);
-                while let Some(chunk) = byte_stream.next().await {
-                    if tx.send(chunk).await.is_err() {
-                        break;
-                    }
-                }
-            });
-            rx
-        }),
-        idle_timeout,
-    );
+    let timed_stream = tokio_stream::StreamExt::timeout(byte_stream, idle_timeout);
     let proxied_stream = {
         let mut usage_sender = Some(usage_tx);
-        let mut line_buf = String::new();
-        timed_stream.map(move |item| {
-            match item {
-                Ok(Ok(bytes)) => {
-                    if let Ok(text) = std::str::from_utf8(&bytes) {
-                        line_buf.push_str(text);
-                        // Cap line_buf to prevent unbounded memory growth
-                        if line_buf.len() > max_line_buf {
-                            tracing::warn!(
-                                size = line_buf.len(),
-                                max = max_line_buf,
-                                "line_buf exceeded max size, clearing"
-                            );
-                            line_buf.clear();
-                        }
-                        // Only process complete lines (terminated by \n).
-                        while let Some(newline_pos) = line_buf.find('\n') {
-                            {
-                                let complete_line = &line_buf[..newline_pos];
-                                if let Some(json_str) = complete_line.strip_prefix("data: ") {
-                                    let json_str = json_str.trim();
-                                    if json_str != "[DONE]" {
-                                        if let Ok(val) =
-                                            serde_json::from_str::<serde_json::Value>(json_str)
-                                        {
-                                            if let Some(usage) = val.get("usage") {
-                                                if !usage.is_null() {
-                                                    let pt = usage
-                                                        .get("prompt_tokens")
-                                                        .and_then(|v| v.as_u64())
-                                                        .unwrap_or(0)
-                                                        as u32;
-                                                    let ct = usage
-                                                        .get("completion_tokens")
-                                                        .and_then(|v| v.as_u64())
-                                                        .unwrap_or(0)
-                                                        as u32;
-                                                    if let Some(sender) = usage_sender.take() {
-                                                        let _ = sender.send((pt, ct));
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
+        let mut line_buf = Vec::new();
+        timed_stream.map(move |item| match item {
+            Ok(Ok(bytes)) => {
+                line_buf.extend_from_slice(&bytes);
+                if line_buf.len() > max_line_buf {
+                    return Err(std::io::Error::other("oversized SSE line"));
+                }
+                while let Some(end) = line_buf.iter().position(|byte| *byte == b'\n') {
+                    if let Some(raw) = line_buf[..end].strip_prefix(b"data:") {
+                        if let Ok(value) = serde_json::from_slice::<serde_json::Value>(raw) {
+                            if let (Some(prompt), Some(completion)) = (
+                                value["usage"]["prompt_tokens"].as_u64(),
+                                value["usage"]["completion_tokens"].as_u64(),
+                            ) {
+                                if let Some(sender) = usage_sender.take() {
+                                    let _ = sender.send((prompt as u32, completion as u32));
                                 }
                             }
-                            // In-place removal instead of allocating a new String
-                            line_buf.replace_range(..newline_pos + 1, "");
                         }
                     }
-                    Ok::<_, std::io::Error>(bytes)
+                    line_buf.drain(..=end);
                 }
-                Ok(Err(e)) => Err(std::io::Error::other(e)),
-                Err(_elapsed) => {
-                    tracing::warn!("stream idle timeout exceeded");
-                    Err(std::io::Error::new(
-                        std::io::ErrorKind::TimedOut,
-                        "stream idle chunk timeout",
-                    ))
-                }
+                Ok::<_, std::io::Error>(bytes)
+            }
+            Ok(Err(e)) => Err(std::io::Error::other(e)),
+            Err(_elapsed) => {
+                tracing::warn!("stream idle timeout exceeded");
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "stream idle chunk timeout",
+                ))
             }
         })
     };
     let body = Body::from_stream(proxied_stream);
-    // Background task: waits for the stream to complete, settles billing,
-    // records metrics, releases the semaphore permit on drop.
-    //
-    // The JoinHandle is stored in `_settlement_handle` so that if the runtime
-    // shuts down before completion, the task's drop is visible in logs via
-    // the tracing guard inside the future.
     let settlement_handle = tokio::spawn(async move {
         // Guard that logs if this future is cancelled mid-flight (e.g. on shutdown).
         struct SettlementDropGuard(bool);
@@ -558,6 +642,7 @@ async fn list_models(State(state): State<AppState>) -> Json<ModelList> {
         id: backend.config.vllm.model.clone(),
         object: "model".to_string(),
         owned_by: "operator".to_string(),
+        context_length: backend.config.vllm.max_model_len,
     }];
     for provider in &backend.config.vllm.providers {
         for model in &provider.models {
@@ -568,6 +653,7 @@ async fn list_models(State(state): State<AppState>) -> Json<ModelList> {
                 id: model.clone(),
                 object: "model".to_string(),
                 owned_by: provider.name.clone(),
+                context_length: backend.config.vllm.max_model_len,
             });
         }
     }
@@ -576,13 +662,15 @@ async fn list_models(State(state): State<AppState>) -> Json<ModelList> {
         data,
     })
 }
-/// Operator info endpoint for discovery. Returns model, pricing, GPU caps, endpoint.
 async fn operator_info(State(state): State<AppState>) -> Json<serde_json::Value> {
     let backend = backend_from(&state);
     let gpu_info = detect_gpus().await.unwrap_or_default();
+    let runtime = backend.vllm.runtime_info().await.ok();
     Json(serde_json::json!({
         "operator": format!("{:#x}", state.operator_address),
         "model": backend.config.vllm.model,
+        "tee": tangle_inference_core::tee_status(),
+        "runtime": runtime,
         "providers": backend.config.vllm.providers.iter().map(|provider| &provider.name).collect::<Vec<_>>(),
         "pricing": {
             "price_per_input_token": backend.config.vllm.price_per_input_token,
@@ -626,22 +714,4 @@ async fn gpu_health() -> Result<Json<Vec<GpuInfo>>, (StatusCode, String)> {
         Ok(gpus) => Ok(Json(gpus)),
         Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
     }
-}
-async fn metrics_handler() -> Response {
-    let body = tangle_inference_core::metrics::gather();
-    Response::builder()
-        .status(StatusCode::OK)
-        .header(
-            header::CONTENT_TYPE,
-            "text/plain; version=0.0.4; charset=utf-8",
-        )
-        .body(Body::from(body))
-        .unwrap_or_else(|e| {
-            error_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("failed to build metrics response: {e}"),
-                "internal_error",
-                "response_build_failed",
-            )
-        })
 }

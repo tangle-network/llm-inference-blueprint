@@ -1,35 +1,10 @@
-# Local Development Scripts
+# Integration checks
 
-## Quick Start
+The pinned core dependency owns protocol fixtures. Resolve it and run its maintained chain checks from the repository root:
 
 ```bash
-# Terminal 1: Deploy contracts to local Anvil
-./scripts/deploy-local.sh
-
-# Terminal 2 (optional): Start the operator
-OLLAMA_URL=http://127.0.0.1:11434 cargo run
-
-# Terminal 3: Run E2E tests
-./scripts/test-e2e.sh
+CORE_DIR="$(cargo metadata --locked --format-version 1 | python3 -c 'import json,sys,pathlib; print(pathlib.Path(next(p["manifest_path"] for p in json.load(sys.stdin)["packages"] if p["name"] == "tangle-inference-core")).parent)')"
+bash "$CORE_DIR/scripts/test-full-protocol.sh"
 ```
 
-## Prerequisites
-
-- **Foundry** (`anvil`, `forge`, `cast`)
-- **Node.js** (for EIP-712 signing helper)
-- **Ollama** with `qwen2:0.5b` (optional, for inference tests)
-
-## Scripts
-
-| Script | Description |
-|---|---|
-| `deploy-local.sh` | Starts Anvil, deploys MockERC20 + ShieldedCredits + RLNSettlement, funds accounts, writes `.env.local` |
-| `test-e2e.sh` | Full E2E test suite: credit mode, RLN mode, malicious inputs, inference API |
-| `sign-spend-auth.mjs` | EIP-712 SpendAuthorization signer (used by test-e2e.sh) |
-
-## Environment Overrides
-
-- `ANVIL_PORT` — Anvil port (default: 8645)
-- `SKIP_ANVIL=1` — Use existing Anvil instance
-- `SKIP_INFERENCE=1` — Skip operator API / Ollama tests
-- `OPERATOR_PORT` — Operator HTTP port (default: 9100)
+The existing [SDK HTTP and chain checks](../sdk/scripts/) require a predeployed RPC, deployed billing contracts and private `.env.local` configuration supplied from the approved deployment. The HTTP script's `--operator-lite-bin` mode takes a qualified binary, its provenance and a private operator configuration to exercise real backend output and cached usage. Retain nonce stores across operator upgrades.

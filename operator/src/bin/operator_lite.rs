@@ -1,22 +1,12 @@
-//! Minimal operator binary — runs the HTTP server + billing client without
-//! BlueprintRunner or Tangle Substrate. Used for E2E tests that exercise
-//! the real Rust operator code path (real signature verification, real
-//! authorizeSpend/settlePayment on-chain) without needing a full Tangle node.
-//!
-//! Expects an external "vLLM" backend (which can actually be an Ollama proxy)
-//! reachable at `vllm.host:vllm.port`. This binary never spawns vLLM itself —
-//! it uses `VllmProcess::connect()` to attach to an already-running backend.
-//!
-//! Config is loaded via `OperatorConfig::load()` — file path via first CLI
-//! arg, env vars override via `VLLM_OP_*` prefix.
+//! HTTP operator with core-owned engine and billing.
 
 use std::sync::Arc;
 
 use tokio::sync::watch;
 
+use llm_inference::chat::ChatClient;
 use llm_inference::config::OperatorConfig;
 use llm_inference::server::{self, VllmBackend};
-use llm_inference::vllm::VllmProcess;
 use llm_inference::{AppStateBuilder, BillingClient, NonceStore};
 
 fn setup_log() {
@@ -29,31 +19,31 @@ fn setup_log() {
 async fn main() -> anyhow::Result<()> {
     setup_log();
 
-    // Load config from optional file + VLLM_OP_* env vars
     let path = std::env::args().nth(1);
     let config = Arc::new(OperatorConfig::load(path.as_deref())?);
     tracing::info!(
-        rpc_url = %config.tangle.rpc_url,
-        shielded_credits = %config.tangle.shielded_credits,
         vllm_host = %config.vllm.host,
         vllm_port = config.vllm.port,
         server_port = config.server.port,
         "operator-lite starting"
     );
 
-    // Connect to an already-running "vLLM" backend (Ollama proxy in tests)
-    let vllm = Arc::new(VllmProcess::connect(config.clone())?);
+    let managed = !config.vllm.external
+        && (config.vllm.base_family.is_some()
+            || config.vllm.engine.engine == tangle_inference_core::engine::EngineKind::Sglang);
+    let vllm = Arc::new(if managed {
+        ChatClient::spawn(config.clone()).await?
+    } else {
+        ChatClient::connect(config.clone())?
+    });
 
-    // Build billing client via the shared core constructor.
     let billing = Arc::new(BillingClient::new(&config.tangle, &config.billing)?);
     let operator_address = billing.operator_address();
     tracing::info!(%operator_address, "billing client ready");
 
-    // Persistent nonce replay store
     let nonce_store = Arc::new(NonceStore::load(config.billing.nonce_store_path.clone()));
 
-    // Build AppState via the shared builder, attaching the VllmBackend.
-    let backend = VllmBackend::new(config.clone(), vllm);
+    let backend = VllmBackend::new(config.clone(), vllm.clone());
     let state = AppStateBuilder::new()
         .billing(billing)
         .nonce_store(nonce_store)
@@ -64,19 +54,22 @@ async fn main() -> anyhow::Result<()> {
         .backend(backend)
         .build()?;
 
-    // Start the HTTP server
-    let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let handle = server::start(state, shutdown_rx).await?;
     tracing::info!("operator-lite HTTP server running — Ctrl+C to stop");
 
-    tokio::select! {
-        _ = tokio::signal::ctrl_c() => {
-            tracing::info!("received Ctrl+C, shutting down");
-        }
-        res = handle => {
-            tracing::warn!(?res, "HTTP server task ended");
-        }
-    }
-
-    Ok(())
+    let outcome: anyhow::Result<()> = tokio::select! {
+        result = async {
+            if managed { vllm.wait_ready().await?; }
+            vllm.supervise(shutdown_tx.subscribe()).await
+        } => result,
+        result = tokio::signal::ctrl_c() => result.map_err(Into::into),
+        result = handle => match result {
+            Ok(()) => Err(anyhow::anyhow!("HTTP server stopped")),
+            Err(error) => Err(error.into()),
+        },
+    };
+    let _ = shutdown_tx.send(true);
+    vllm.shutdown().await;
+    outcome
 }

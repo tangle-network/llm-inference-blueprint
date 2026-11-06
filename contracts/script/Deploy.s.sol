@@ -1,73 +1,31 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.20;
-
+pragma solidity ^0.8.26;
 import {Script, console2} from "forge-std/Script.sol";
-import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {InferenceBSM} from "../src/InferenceBSM.sol";
-import {ShieldedCredits} from "shielded-payment-gateway/src/shielded/ShieldedCredits.sol";
-import {RLNSettlement} from "shielded-payment-gateway/src/shielded/RLNSettlement.sol";
+import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 
-/// @title Deploy — vLLM Inference Blueprint Contracts
-/// @notice Deploys InferenceBSM, ShieldedCredits, and RLNSettlement.
-///
-/// Usage:
-///   export PRIVATE_KEY=0x...
-///   forge script script/Deploy.s.sol:Deploy --rpc-url $RPC_URL --broadcast --slow
-///
-/// Environment variables:
-///   PRIVATE_KEY          — deployer private key
-///   PAYMENT_TOKEN_ADDRESS — ERC20 payment token address (e.g. USDC wrapped via VAnchor)
-///   TANGLE_CORE_ADDRESS   — Tangle core contract address (optional, set post-deploy)
+/// Model-specific manager deployment; cargo-tangle registers the definition.
 contract Deploy is Script {
     function run() external {
-        uint256 deployerKey = vm.envUint("PRIVATE_KEY");
-        address paymentToken = vm.envOr("PAYMENT_TOKEN_ADDRESS", address(0));
-        address tangleCore = vm.envOr("TANGLE_CORE_ADDRESS", address(0));
-
-        vm.startBroadcast(deployerKey);
-
-        // 1. Deploy ShieldedCredits
-        ShieldedCredits credits = new ShieldedCredits();
-        console2.log("ShieldedCredits:", address(credits));
-
-        // 2. Deploy RLNSettlement
-        RLNSettlement rln = new RLNSettlement();
-        console2.log("RLNSettlement:", address(rln));
-
-        // 3. Deploy InferenceBSM (UUPS proxy)
-        if (paymentToken == address(0)) {
-            console2.log("WARNING: PAYMENT_TOKEN_ADDRESS not set, using address(1) as placeholder");
-            paymentToken = address(1);
-        }
-        InferenceBSM impl = new InferenceBSM();
-        ERC1967Proxy proxy = new ERC1967Proxy(
-            address(impl),
-            abi.encodeCall(InferenceBSM.initialize, (paymentToken))
+        address registry = vm.envAddress("TANGLE_CORE");
+        require(registry.code.length != 0, "TANGLE_CORE has no code");
+        address token = vm.envAddress("PAYMENT_TOKEN");
+        // The model's operator config is the one source of its served model, prices and VRAM floor.
+        string memory config = vm.readFile(vm.envOr("MODEL_CONFIG", string("../deploy/config.example.json")));
+        vm.startBroadcast();
+        InferenceBSM implementation = new InferenceBSM();
+        address manager = address(
+            new ERC1967Proxy(address(implementation), abi.encodeCall(InferenceBSM.initialize, (token, registry)))
         );
-        InferenceBSM bsm = InferenceBSM(payable(address(proxy)));
-        console2.log("InferenceBSM impl:", address(impl));
-        console2.log("InferenceBSM proxy:", address(bsm));
-
-        // 4. If Tangle core address provided, initialize BSM
-        if (tangleCore != address(0)) {
-            bsm.onBlueprintCreated(0, msg.sender, tangleCore);
-            console2.log("BSM initialized with Tangle core:", tangleCore);
-        }
-
-        // 5. Model config must be done post-deploy by the blueprint owner.
-        // The forge-script msg.sender shim doesn't align with the BSM's
-        // owner check even though startBroadcast() uses the correct signer.
-        // Run `cast send <bsm> 'configureModel(...)' --from <owner>` separately.
-        console2.log("NOTE: configureModel must be called post-deploy by blueprint owner");
-
+        InferenceBSM(payable(manager)).configureModel(
+            vm.parseJsonString(config, ".vllm.model"),
+            uint32(vm.parseJsonUint(config, ".vllm.max_model_len")),
+            uint64(vm.parseJsonUint(config, ".vllm.price_per_input_token")),
+            uint64(vm.parseJsonUint(config, ".vllm.price_per_output_token")),
+            uint32(vm.parseJsonUint(config, ".gpu.min_vram_mib"))
+        );
+        console2.log("DEPLOY_INFERENCE_BSM_IMPL=%s", vm.toString(address(implementation)));
         vm.stopBroadcast();
-
-        // Summary
-        console2.log("");
-        console2.log("=== Deployment Summary ===");
-        console2.log("ShieldedCredits:", address(credits));
-        console2.log("RLNSettlement:  ", address(rln));
-        console2.log("InferenceBSM:    ", address(bsm), "(proxy)");
-        console2.log("paymentToken:   ", paymentToken);
+        console2.log("DEPLOY_INFERENCE_BSM_PROXY=%s", vm.toString(manager));
     }
 }

@@ -48,7 +48,8 @@ contract InferenceBSM is Initializable, UUPSUpgradeable, BlueprintServiceManager
     }
     /// @notice Initialize the contract (called once via proxy)
     /// @param _paymentToken The ERC20 token accepted for payment (e.g. USDC wrapped via VAnchor)
-    function initialize(address _paymentToken) external initializer {
+    function initialize(address _paymentToken, address registry) external initializer {
+        _initializeBlueprintManager(registry, msg.sender);
         __UUPSUpgradeable_init();
         paymentToken = _paymentToken;
     }
@@ -179,7 +180,7 @@ contract InferenceBSM is Initializable, UUPSUpgradeable, BlueprintServiceManager
         uint8,
         uint64 jobCallId,
         address operator,
-        bytes calldata,
+        bytes32,
         bytes calldata outputs
     )
         external
