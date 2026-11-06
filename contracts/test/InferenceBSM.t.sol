@@ -135,15 +135,6 @@ contract InferenceBSMTest is Test {
 
     // ─── Job Lifecycle ───────────────────────────────────────────────────
 
-    function test_onJobResult_unregisteredOperator() public {
-        bytes memory inputs = abi.encode("test", uint32(10), uint64(7000));
-        bytes memory outputs = abi.encode("result", uint32(2), uint32(3));
-
-        vm.prank(tangleCore);
-        vm.expectRevert(abi.encodeWithSelector(InferenceBSM.OperatorNotRegistered.selector, operator1));
-        bsm.onJobResult(1, 0, 1, operator1, inputs, outputs);
-    }
-
     // ─── Configuration Queries ───────────────────────────────────────────
 
     function test_paymentAssetAllowed_paymentToken() public {

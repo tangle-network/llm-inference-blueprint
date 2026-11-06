@@ -180,7 +180,7 @@ contract InferenceBSM is Initializable, UUPSUpgradeable, BlueprintServiceManager
         uint8,
         uint64 jobCallId,
         address operator,
-        bytes calldata,
+        bytes32,
         bytes calldata outputs
     )
         external
