@@ -144,11 +144,7 @@ async fn test_streaming_through_handler() {
 
     Mock::given(method("POST"))
         .and(path("/v1/chat/completions"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_string(sse_body)
-                .insert_header("content-type", "text/event-stream"),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_raw(sse_body, "text/event-stream"))
         .mount(&mock_vllm)
         .await;
 
@@ -722,8 +718,7 @@ async fn test_empty_backend_stream_is_retryable_before_http_success() {
     Mock::given(method("POST"))
         .and(path("/v1/chat/completions"))
         .respond_with(ResponseTemplate::new(200)
-            .set_body_string("data: {\"model\":\"test-model\",\"choices\":[{\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null}]}\n\ndata: [DONE]\n\n")
-            .insert_header("content-type", "text/event-stream"))
+            .set_body_raw("data: {\"model\":\"test-model\",\"choices\":[{\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null}]}\n\ndata: [DONE]\n\n", "text/event-stream"))
         .mount(&peer).await;
     let (port, shutdown, handle) = start_test_server(peer.address().port()).await;
     let began = std::time::Instant::now();
