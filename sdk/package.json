@@ -17,7 +17,7 @@
   },
   "scripts": {
     "build": "tsup",
-    "test": "vitest run",
+    "test": "node scripts/onchain-e2e.mjs --http-peer",
     "typecheck": "tsc --noEmit"
   },
   "peerDependencies": {

@@ -1,5 +1,6 @@
 import type { Address, Hex } from "viem";
 import type { createLocalSpendSigner } from "./spendAuth";
+import type { SpendAuth as WireSpendAuth, SpendAuthPayload as SignedSpendAuth } from "@tangle-network/tcloud/shielded";
 
 /** Chat message in OpenAI format */
 export interface ChatMessage {
@@ -75,37 +76,8 @@ export interface OperatorInfo {
   payment_token: string | null;
 }
 
-/**
- * A signed ShieldedCredits spend authorization. Field order and types mirror
- * `ShieldedCredits.SPEND_TYPEHASH` exactly — changing any of this breaks
- * on-chain recovery and the operator's signature check.
- */
-export interface SpendAuth {
-  commitment: Hex;
-  serviceId: bigint;
-  jobIndex: number;
-  amount: bigint;
-  operator: Address;
-  nonce: bigint;
-  expiry: bigint;
-  signature: Hex;
-}
-
-/**
- * Wire shape the operator parses (`SpendAuthPayload`, camelCase, numbers as
- * strings for bigint safety). This is what goes in the request body's
- * `spend_auth` field or the `X-Payment-Signature` header.
- */
-export interface SpendAuthPayload {
-  commitment: Hex;
-  serviceId: number;
-  jobIndex: number;
-  amount: string;
-  operator: Address;
-  nonce: number;
-  expiry: number;
-  signature: Hex;
-}
+export type SpendAuth = SignedSpendAuth;
+export type SpendAuthPayload = WireSpendAuth;
 
 /** On-chain credit account state (`getAccount`). */
 export interface CreditAccount {

@@ -53,8 +53,15 @@ jobs:
           IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}/operator-lite"
           printf '%s' "$GH_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
           if gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern operator-lite-image.txt --dir "$RUNNER_TEMP/prior-image"; then
-            PRIOR_IMAGE=$(cat "$RUNNER_TEMP/prior-image/operator-lite-image.txt")
-            [[ "$PRIOR_IMAGE" == "$IMAGE@sha256:"* && "${PRIOR_IMAGE#"$IMAGE@sha256:"}" =~ ^[a-f0-9]{64}$ ]]
+            PRIOR_IMAGE=$(python3 - "$RUNNER_TEMP/prior-image/operator-lite-image.txt" "$IMAGE" <<'RECEIPT'
+          import re, sys
+          with open(sys.argv[1], "rb") as source:
+              receipt = source.read(4096)
+          if re.fullmatch(re.escape(sys.argv[2].encode()) + rb"@sha256:[a-f0-9]{64}\n?", receipt) is None:
+              raise SystemExit("invalid serving image receipt")
+          sys.stdout.buffer.write(receipt.removesuffix(b"\n"))
+          RECEIPT
+            )
             docker pull "$PRIOR_IMAGE"
             docker tag "$PRIOR_IMAGE" qualified-operator-lite
             cp "$RUNNER_TEMP/prior-image/operator-lite-image.txt" "$RUNNER_TEMP/operator-lite-image.txt"

@@ -162,7 +162,8 @@ async function httpPeer(context) {
     for await (const chunk of request) bytes += chunk
     let payload, verified = false
     try {
-      const { signature, ...fields } = JSON.parse(bytes).spend_auth
+      const body = JSON.parse(bytes)
+      const { signature, ...fields } = body.spend_auth
       payload = fields
       const recovered = await recoverTypedDataAddress({
         ...buildSpendAuthMessage({ ...fields, serviceId: BigInt(fields.serviceId),
@@ -174,6 +175,9 @@ async function httpPeer(context) {
       verified = getAddress(recovered) === getAddress(context.account)
         && String(fields.serviceId) === expected.serviceId
         && String(fields.nonce) === expected.nonce && fields.amount === '17'
+        && request.method === 'POST' && request.url === '/v1/chat/completions'
+        && body.model === 'fixture' && body.max_tokens === 1 && body.stream === false
+        && body.messages[0].role === 'user' && body.messages[0].content === 'Hello'
     } catch {}
     console.log(JSON.stringify({ type: 'authorization', index: requestIndex++, payload, verified }))
     response.writeHead(verified ? 200 : 422, { 'Content-Type': 'application/json' })

@@ -34,7 +34,7 @@ class LocalSpendSigner {
     );
     return { commitment: params.commitment, serviceId: params.serviceId, jobIndex,
       operator: params.operator, amount: params.amount, nonce: params.nonce,
-      expiry: params.expiry, signature: signature as Hex };
+      expiry: params.expiry, signature };
   }
 }
 
@@ -49,8 +49,8 @@ export function signSpendAuth(params: Authorization & { signer: LocalSpendSigner
 
 export function toSpendAuthPayload(auth: SpendAuth): SpendAuthPayload {
   return {
-    commitment: auth.commitment, serviceId: Number(auth.serviceId), jobIndex: auth.jobIndex,
-    amount: auth.amount.toString(), operator: auth.operator, nonce: Number(auth.nonce),
-    expiry: Number(auth.expiry), signature: auth.signature,
+    commitment: auth.commitment, serviceId: auth.serviceId.toString(), jobIndex: auth.jobIndex,
+    amount: auth.amount.toString(), operator: auth.operator, nonce: auth.nonce.toString(),
+    expiry: auth.expiry.toString(), signature: auth.signature,
   };
 }
