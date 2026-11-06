@@ -136,7 +136,7 @@ while not os.path.exists(sys.argv[3]) and os.getppid() == parent: server.handle_
 async fn private_operator_requires_selected_sdk_key() -> anyhow::Result<()> {
     use blueprint_keystore::{
         backends::Backend,
-        crypto::{k256::K256Ecdsa, BytesEncoding},
+        crypto::{k256::K256Ecdsa, BytesEncoding, KeyType},
         Keystore, KeystoreConfig,
     };
     use std::os::unix::fs::PermissionsExt;
@@ -218,5 +218,62 @@ async fn private_operator_requires_selected_sdk_key() -> anyhow::Result<()> {
     }
     assert_eq!(wrong, 401);
     assert_eq!(valid, 200);
+    let wallet = <K256Ecdsa as KeyType>::Secret::from_bytes(&hex::decode(
+        config["tangle"]["operator_key"]
+            .as_str()
+            .unwrap()
+            .trim_start_matches("0x"),
+    )?)?;
+    store.insert::<K256Ecdsa>(&wallet)?;
+    let wallet_public = hex::encode(K256Ecdsa::public_from_secret(&wallet).to_bytes());
+    let missing =
+        Keystore::new(KeystoreConfig::new().in_memory(true))?.generate::<K256Ecdsa>(None)?;
+    for case in ["root", "format", "key", "permissions", "wallet"] {
+        let mut invalid = config.clone();
+        if case == "format" {
+            invalid["server"]["endpoint_key"]
+                .as_object_mut()
+                .unwrap()
+                .remove("format");
+        }
+        if case == "key" {
+            invalid["server"]["endpoint_key"]["key"] = json!(hex::encode(missing.to_bytes()));
+        }
+        if case == "wallet" {
+            invalid["server"]["endpoint_key"]["key"] = json!(wallet_public);
+        }
+        if case == "permissions" {
+            std::fs::set_permissions(&keys, std::fs::Permissions::from_mode(0o755))?;
+        }
+        std::fs::write(&path, serde_json::to_vec(&invalid)?)?;
+        let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_operator-lite"));
+        command
+            .arg(&path)
+            .current_dir(dir.path())
+            .env_clear()
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .kill_on_drop(true);
+        if case != "root" {
+            command.env("KEYSTORE_URI", &keys);
+        }
+        let mut rejected = command.spawn()?;
+        let outcome = tokio::time::timeout(Duration::from_secs(3), rejected.wait()).await;
+        if outcome.is_err() {
+            rejected.kill().await?;
+            rejected.wait().await?;
+        }
+        std::fs::set_permissions(&keys, std::fs::Permissions::from_mode(0o700))?;
+        assert!(
+            outcome.is_ok_and(|status| status.is_ok_and(|status| !status.success())),
+            "private operator accepted invalid {case} configuration"
+        );
+        assert!(
+            tokio::net::TcpStream::connect(("127.0.0.1", port))
+                .await
+                .is_err(),
+            "invalid {case} configuration left an HTTP listener"
+        );
+    }
     Ok(())
 }

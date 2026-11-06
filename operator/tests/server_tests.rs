@@ -32,7 +32,6 @@ fn test_config(vllm_port: u16) -> OperatorConfig {
                 tensor_parallel_size: 1,
                 extra_args: vec![],
                 command: "python3 -m vllm.entrypoints.openai.api_server".into(),
-                hf_token: None,
                 download_dir: None,
                 startup_timeout_secs: 10,
                 external: false,
