@@ -17,7 +17,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 use tangle_inference_core::payment::PaymentProof;
 use tangle_inference_core::server::{
-    authorize_request, backend_unavailable, error_response, payment_required,
+    authorize_request, backend_unavailable, error_response, metrics_handler, payment_required,
     resolve_payment_proof, settle_request, AuthorizedPayment,
 };
 use tangle_inference_core::{
