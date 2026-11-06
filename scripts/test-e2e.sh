@@ -19,6 +19,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+CORE_DIR="$(cargo metadata --manifest-path "$ROOT_DIR/Cargo.toml" --format-version 1 --locked | jq -r '.packages[] | select(.name == "tangle-inference-core") | .manifest_path | rtrimstr("/Cargo.toml")')"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Load environment
@@ -84,8 +85,7 @@ send_authorize_spend() {
 
 # Helper: sign a SpendAuth via the node script
 sign_spend_auth() {
-    node "$ROOT_DIR/scripts/sign-spend-auth.mjs" \
-        --private-key "$1" \
+    printf '%s' "$1" | node "$CORE_DIR/scripts/sign-spend-auth.mjs" \
         --verifying-contract "$SHIELDED_CREDITS" \
         --chain-id "${CHAIN_ID:-31337}" \
         --commitment "$2" \

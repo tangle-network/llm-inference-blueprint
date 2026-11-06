@@ -10,7 +10,7 @@
 - [x] RLNSettlement alternative billing path with RLN-based slashing
 - [x] Billing E2E tests (BillingE2E.t.sol, RLNBillingE2E.t.sol)
 - [x] Import tnt-core as soldeer dependency (v0.10.4, proper imports)
-- [x] Deploy script (contracts/script/Deploy.s.sol — deploys ShieldedCredits, RLNSettlement, InferenceBSM with ERC1967Proxy)
+- [x] Model deployment adapter (contracts/script/Deploy.s.sol); shared definition and registration in pinned core
 
 ## Phase 2: Operator Core — Complete
 

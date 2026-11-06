@@ -25,7 +25,8 @@ OLLAMA_URL=http://127.0.0.1:11434 cargo run
 |---|---|
 | `deploy-local.sh` | Starts Anvil, deploys MockERC20 + ShieldedCredits + RLNSettlement, funds accounts, writes `.env.local` |
 | `test-e2e.sh` | Full E2E test suite: credit mode, RLN mode, malicious inputs, inference API |
-| `sign-spend-auth.mjs` | EIP-712 SpendAuthorization signer (used by test-e2e.sh) |
+The signing helper and full protocol proof come from the pinned core dependency.
+Resolve its path with `cargo metadata` and run `node "$CORE_DIR/scripts/sign-spend-auth.mjs"` (private key on stdin), or `bash "$CORE_DIR/scripts/test-full-protocol.sh" "$PWD"`.
 
 ## Environment Overrides
 

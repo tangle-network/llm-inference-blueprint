@@ -7,8 +7,8 @@
 //! * `VllmBackend` — the backend attached to `AppState` via `AppStateBuilder`.
 //! * Request/response types for the OpenAI chat/completions wire format.
 //! * HTTP handlers that glue the shared billing flow to the vLLM subprocess.
+use crate::chat::ChatClient;
 use crate::config::OperatorConfig;
-use crate::vllm::VllmProcess;
 use axum::{
     body::Body,
     extract::{DefaultBodyLimit, State},
@@ -17,12 +17,12 @@ use axum::{
     routing::{get, post},
     Json, Router as HttpRouter,
 };
-use blueprint_sdk::std::sync::Arc;
-use blueprint_sdk::std::time::Duration;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::sync::Mutex;
+use std::time::Duration;
 use tangle_inference_core::payment::PaymentProof;
 use tangle_inference_core::server::{
     authorize_request, error_response, payment_required, resolve_payment_proof, settle_request,
@@ -45,7 +45,7 @@ use tower_http::trace::TraceLayer;
 /// and a pre-built per-token cost model.
 pub struct VllmBackend {
     pub config: Arc<OperatorConfig>,
-    pub vllm: Arc<VllmProcess>,
+    pub vllm: Arc<ChatClient>,
     pub cost_model: PerTokenCostModel,
     /// Handles of spawned settlement tasks, drained on shutdown.
     pub pending_settlements: Mutex<Vec<JoinHandle<()>>>,
@@ -74,7 +74,7 @@ impl UsageLedger {
     }
 }
 impl VllmBackend {
-    pub fn new(config: Arc<OperatorConfig>, vllm: Arc<VllmProcess>) -> Self {
+    pub fn new(config: Arc<OperatorConfig>, vllm: Arc<ChatClient>) -> Self {
         let cost_model = PerTokenCostModel {
             price_per_input_token: config.vllm.price_per_input_token,
             price_per_output_token: config.vllm.price_per_output_token,

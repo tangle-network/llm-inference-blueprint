@@ -1,73 +1,27 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.20;
-
-import {Script, console2} from "forge-std/Script.sol";
-import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
+pragma solidity ^0.8.26;
+import {RegisterBlueprint} from "tangle-inference-core/script/RegisterBlueprint.s.sol";
+import {console2} from "forge-std/Script.sol";
 import {InferenceBSM} from "../src/InferenceBSM.sol";
-import {ShieldedCredits} from "shielded-payment-gateway/src/shielded/ShieldedCredits.sol";
-import {RLNSettlement} from "shielded-payment-gateway/src/shielded/RLNSettlement.sol";
+import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 
-/// @title Deploy — vLLM Inference Blueprint Contracts
-/// @notice Deploys InferenceBSM, ShieldedCredits, and RLNSettlement.
-///
-/// Usage:
-///   export PRIVATE_KEY=0x...
-///   forge script script/Deploy.s.sol:Deploy --rpc-url $RPC_URL --broadcast --slow
-///
-/// Environment variables:
-///   PRIVATE_KEY          — deployer private key
-///   PAYMENT_TOKEN_ADDRESS — ERC20 payment token address (e.g. USDC wrapped via VAnchor)
-///   TANGLE_CORE_ADDRESS   — Tangle core contract address (optional, set post-deploy)
-contract Deploy is Script {
-    function run() external {
-        uint256 deployerKey = vm.envUint("PRIVATE_KEY");
-        address paymentToken = vm.envOr("PAYMENT_TOKEN_ADDRESS", address(0));
-        address tangleCore = vm.envOr("TANGLE_CORE_ADDRESS", address(0));
+contract Deploy is RegisterBlueprint {
+    function _deployManager() internal override returns (address) {
+        return _deployManagerFor(vm.envAddress("PAYMENT_TOKEN"));
+    }
 
-        vm.startBroadcast(deployerKey);
-
-        // 1. Deploy ShieldedCredits
-        ShieldedCredits credits = new ShieldedCredits();
-        console2.log("ShieldedCredits:", address(credits));
-
-        // 2. Deploy RLNSettlement
-        RLNSettlement rln = new RLNSettlement();
-        console2.log("RLNSettlement:", address(rln));
-
-        // 3. Deploy InferenceBSM (UUPS proxy)
-        if (paymentToken == address(0)) {
-            console2.log("WARNING: PAYMENT_TOKEN_ADDRESS not set, using address(1) as placeholder");
-            paymentToken = address(1);
-        }
+    function _deployManagerFor(address token) internal returns (address) {
         InferenceBSM impl = new InferenceBSM();
-        ERC1967Proxy proxy = new ERC1967Proxy(
-            address(impl),
-            abi.encodeCall(InferenceBSM.initialize, (paymentToken))
-        );
-        InferenceBSM bsm = InferenceBSM(payable(address(proxy)));
-        console2.log("InferenceBSM impl:", address(impl));
-        console2.log("InferenceBSM proxy:", address(bsm));
+        console2.log("DEPLOY_INFERENCE_BSM_IMPL=%s", vm.toString(address(impl)));
+        return address(new ERC1967Proxy(address(impl), abi.encodeCall(InferenceBSM.initialize, (token))));
+    }
 
-        // 4. If Tangle core address provided, initialize BSM
-        if (tangleCore != address(0)) {
-            bsm.onBlueprintCreated(0, msg.sender, tangleCore);
-            console2.log("BSM initialized with Tangle core:", tangleCore);
-        }
+    function _guardNetwork(address tangleAddr) internal pure override {
+        require(tangleAddr != 0xff137B9C879c47C28ce389e84501925438AB4cdA, "Tempo: use script/DeployTempo.s.sol");
+    }
 
-        // 5. Model config must be done post-deploy by the blueprint owner.
-        // The forge-script msg.sender shim doesn't align with the BSM's
-        // owner check even though startBroadcast() uses the correct signer.
-        // Run `cast send <bsm> 'configureModel(...)' --from <owner>` separately.
-        console2.log("NOTE: configureModel must be called post-deploy by blueprint owner");
-
-        vm.stopBroadcast();
-
-        // Summary
-        console2.log("");
-        console2.log("=== Deployment Summary ===");
-        console2.log("ShieldedCredits:", address(credits));
-        console2.log("RLNSettlement:  ", address(rln));
-        console2.log("InferenceBSM:    ", address(bsm), "(proxy)");
-        console2.log("paymentToken:   ", paymentToken);
+    function _report(address manager, uint64 blueprintId) internal override {
+        console2.log("DEPLOY_INFERENCE_BSM_PROXY=%s", vm.toString(manager));
+        console2.log("DEPLOY_INFERENCE_BLUEPRINT_ID=%s", vm.toString(blueprintId));
     }
 }

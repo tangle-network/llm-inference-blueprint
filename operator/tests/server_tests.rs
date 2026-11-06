@@ -26,19 +26,23 @@ fn test_config(vllm_port: u16) -> OperatorConfig {
             service_id: Some(1),
         },
         vllm: VllmConfig {
-            model: "test-model".into(),
-            max_model_len: 4096,
-            host: "127.0.0.1".into(),
-            port: vllm_port,
-            tensor_parallel_size: 1,
+            engine: tangle_inference_core::engine::EngineConfig {
+                model: "test-model".into(),
+                max_model_len: 4096,
+                host: "127.0.0.1".into(),
+                port: vllm_port,
+                tensor_parallel_size: 1,
+                extra_args: vec![],
+                command: "python3 -m vllm.entrypoints.openai.api_server".into(),
+                hf_token: None,
+                download_dir: None,
+                startup_timeout_secs: 10,
+                external: false,
+
+                ..Default::default()
+            },
             price_per_input_token: 1,
             price_per_output_token: 2,
-            extra_args: vec![],
-            command: "python3 -m vllm.entrypoints.openai.api_server".into(),
-            hf_token: None,
-            download_dir: None,
-            startup_timeout_secs: 10,
-            external: false,
             providers: vec![],
         },
         server: ServerConfig {
@@ -230,7 +234,7 @@ async fn test_semaphore_zero_config_means_unlimited() {
 #[tokio::test]
 async fn test_billing_calculate_cost() {
     let config = Arc::new(test_config(8000));
-    let vllm = Arc::new(llm_inference::vllm::VllmProcess::connect(config.clone()).unwrap());
+    let vllm = Arc::new(llm_inference::chat::ChatClient::connect(config.clone()).unwrap());
     let backend = VllmBackend::new(config, vllm);
 
     // price_per_input_token = 1, price_per_output_token = 2
@@ -378,7 +382,7 @@ fn free_port() -> u16 {
 }
 
 async fn build_test_state(config: Arc<OperatorConfig>) -> llm_inference::AppState {
-    let vllm = Arc::new(llm_inference::vllm::VllmProcess::connect(config.clone()).unwrap());
+    let vllm = Arc::new(llm_inference::chat::ChatClient::connect(config.clone()).unwrap());
     let billing = Arc::new(BillingClient::new(&config.tangle, &config.billing).unwrap());
     let operator_address = billing.operator_address();
     let nonce_store = Arc::new(NonceStore::load(None));
@@ -735,7 +739,7 @@ async fn test_stream_field_defaults_to_false() {
 // ─── Billing Settlement Tests ────────────────────────────────────────────
 
 fn test_backend(config: Arc<OperatorConfig>) -> VllmBackend {
-    let vllm = Arc::new(llm_inference::vllm::VllmProcess::connect(config.clone()).unwrap());
+    let vllm = Arc::new(llm_inference::chat::ChatClient::connect(config.clone()).unwrap());
     VllmBackend::new(config, vllm)
 }
 

@@ -4,6 +4,10 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+default = ["chain"]
+chain = ["dep:blueprint-sdk"]
+
 [lib]
 name = "llm_inference"
 path = "src/lib.rs"
@@ -11,6 +15,7 @@ path = "src/lib.rs"
 [[bin]]
 name = "llm-operator"
 path = "src/main.rs"
+required-features = ["chain"]
 
 # Minimal HTTP-only operator for E2E tests — skips BlueprintRunner and
 # Tangle Substrate, runs just the HTTP server + billing client.
@@ -19,7 +24,7 @@ name = "operator-lite"
 path = "src/bin/operator_lite.rs"
 
 [dependencies]
-blueprint-sdk = { workspace = true, features = ["tee"] }
+blueprint-sdk = { workspace = true, features = ["tee"], optional = true }
 alloy = { workspace = true }
 alloy-sol-types = { workspace = true }
 tokio = { workspace = true }
@@ -34,10 +39,7 @@ hex = { workspace = true }
 k256 = { workspace = true }
 
 # Shared inference operator infrastructure (billing, metrics, health, server helpers).
-# Pinned to the #6 merge commit on master (metered settlement: settlePayment with
-# the actual metered cost + claimPayment full-pre-auth fallback; settle_request
-# takes Option<u64>). Pinned by SHA for reproducible CI; bump as core advances.
-tangle-inference-core = { git = "https://github.com/tangle-network/tangle-inference-core", rev = "8dd186be802d356a666942d57ee3ba6484f9e29a", default-features = false, features = ["billing", "http", "metrics"] }
+tangle-inference-core = { git = "https://github.com/tangle-network/tangle-inference-core", rev = "650cf4285b23546cbaf2e38d38d74231825dbfe6", default-features = false, features = ["billing", "http", "metrics"] }
 
 # Web framework (for OpenAI-compatible HTTP server)
 axum = { version = "0.7", features = ["json", "macros"] }
@@ -67,3 +69,19 @@ tower = { version = "0.5", features = ["util"] }
 futures-util = "0.3"
 
 tempfile = "3"
+
+[[test]]
+name = "harness_e2e"
+required-features = ["chain"]
+
+[[test]]
+name = "lifecycle"
+required-features = ["chain"]
+
+[[test]]
+name = "local_e2e"
+required-features = ["chain"]
+
+[[test]]
+name = "registration"
+required-features = ["chain"]
