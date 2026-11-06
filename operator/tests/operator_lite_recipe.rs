@@ -33,6 +33,8 @@ HTTPServer(('127.0.0.1', port), Health).serve_forever()
     let mut config: Value = serde_json::from_str(include_str!("../../deploy/config.example.json"))?;
     config["vllm"]["engine"] = json!("sglang");
     config["vllm"]["base_family"] = json!("glm-5.3");
+    config["vllm"]["gpu_class"] = json!("nvidia-h200");
+    config["vllm"]["tensor_parallel_size"] = json!(8);
     config["vllm"]["model"] = json!("example/GLM-derivative");
     config["vllm"]["command"] = json!(format!(
         "python3 {} {}",

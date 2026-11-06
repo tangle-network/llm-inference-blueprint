@@ -24,6 +24,7 @@ contract InferenceBSMTest is Test {
         // Deploy implementation + proxy
         InferenceBSM impl = new InferenceBSM();
         bytes memory initData = abi.encodeCall(InferenceBSM.initialize, (address(paymentToken), tangleCore));
+        vm.prank(owner);
         ERC1967Proxy proxy = new ERC1967Proxy(address(impl), initData);
         bsm = InferenceBSM(payable(address(proxy)));
 

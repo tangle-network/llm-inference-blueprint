@@ -25,7 +25,7 @@ fn registration_payload(config: &OperatorConfig) -> Vec<u8> {
 tangle_inference_core::run_operator!(
     OperatorConfig::load(std::env::var("VLLM_OP_CONFIG").ok().as_deref()),
     registration_payload,
-    llm_inference::router(),
+    |_| llm_inference::router(),
     |config| InferenceServer { config },
     qos
 );
