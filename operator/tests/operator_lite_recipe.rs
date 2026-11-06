@@ -193,6 +193,7 @@ async fn private_operator_requires_selected_sdk_key() -> anyhow::Result<()> {
     let port = free_port();
     let mut config: Value = serde_json::from_str(include_str!("../../deploy/config.example.json"))?;
     config["vllm"]["external"] = json!(true);
+    config["vllm"]["port"] = json!(free_port());
     config["server"]["host"] = json!("127.0.0.1");
     config["server"]["port"] = json!(port);
     config["server"]["endpoint_key"] =
@@ -216,7 +217,7 @@ async fn private_operator_requires_selected_sdk_key() -> anyhow::Result<()> {
         .timeout(Duration::from_secs(1))
         .build()?;
     let url = format!("http://127.0.0.1:{port}");
-    let result = tokio::time::timeout(Duration::from_secs(5), async {
+    let result = tokio::time::timeout(Duration::from_secs(10), async {
         loop {
             if client.get(format!("{url}/v1/models")).send().await.is_ok() {
                 break;
@@ -250,17 +251,56 @@ async fn private_operator_requires_selected_sdk_key() -> anyhow::Result<()> {
             .send()
             .await?
             .status();
-        Ok::<_, anyhow::Error>((refused, wrong, valid))
+        let cold = client
+            .get(format!("{url}/health"))
+            .bearer_auth(&token)
+            .send()
+            .await?
+            .status();
+        let probe = include_str!("../Dockerfile")
+            .lines()
+            .find(|line| line.starts_with("HEALTHCHECK "))
+            .and_then(|line| line.split_once(" CMD "))
+            .ok_or_else(|| anyhow::anyhow!("serving image has no HEALTHCHECK CMD"))?
+            .1
+            .replace("8080", &port.to_string());
+        let argv: Vec<String> = if probe.starts_with('[') {
+            serde_json::from_str(&probe)?
+        } else {
+            vec!["/bin/sh".into(), "-c".into(), probe]
+        };
+        let mut probe = tokio::process::Command::new(&argv[0])
+            .args(&argv[1..])
+            .env_clear()
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .kill_on_drop(true)
+            .spawn()?;
+        let live = match tokio::time::timeout(Duration::from_secs(5), probe.wait()).await {
+            Ok(status) => status?.success(),
+            Err(_) => {
+                probe.kill().await?;
+                probe.wait().await?;
+                false
+            }
+        };
+        Ok::<_, anyhow::Error>((refused, wrong, valid, cold, live))
     })
     .await;
     operator.kill().await?;
     operator.wait().await?;
-    let (refused, wrong, valid) = result??;
+    let (refused, wrong, valid, cold, live) = result??;
     for (route, status) in refused {
         assert_eq!(status, 401, "unauthenticated {route}");
     }
     assert_eq!(wrong, 401);
     assert_eq!(valid, 200);
+    assert_eq!(cold, 503);
+    assert!(
+        live,
+        "Dockerfile HEALTHCHECK rejected private operator liveness"
+    );
     let wallet = <K256Ecdsa as KeyType>::Secret::from_bytes(&hex::decode(
         config["tangle"]["operator_key"]
             .as_str()
