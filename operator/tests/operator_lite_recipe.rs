@@ -31,7 +31,8 @@ if os.path.exists(sys.argv[3]) or os.getppid() != parent: sys.exit(0)
 port = int(sys.argv[sys.argv.index('--port') + 1])
 class Health(BaseHTTPRequestHandler):
     def do_GET(self):
-        self.send_response(200); self.end_headers(); self.wfile.write(b'{}')
+        body = {'data':[{'id':'example/GLM-derivative'}]} if self.path == '/v1/models' else {}
+        self.send_response(200); self.end_headers(); self.wfile.write(json.dumps(body).encode())
     def do_POST(self):
         body = self.rfile.read(int(self.headers['Content-Length']))
         if '--worker-urls' in sys.argv:
@@ -135,6 +136,15 @@ while not os.path.exists(sys.argv[3]) and os.getppid() == parent: server.handle_
                     .send().await?;
                 anyhow::ensure!(response.status().is_success(), "chat did not reach the effective core endpoint: {}", response.status());
                 assert_eq!(response.json::<Value>().await?["id"], "core-endpoint");
+                let info: Value = client.get(format!("http://127.0.0.1:{operator_port}/v1/operator"))
+                    .send().await?.error_for_status()?.json().await?;
+                let runtime = &info["runtime"];
+                assert_eq!(runtime["ready"], true, "operator omitted core runtime facts");
+                assert_eq!(runtime["served_models"], json!(["example/GLM-derivative"]));
+                assert_eq!(runtime["recipe"]["gpu_class"], "nvidia-h200");
+                assert_eq!(runtime["processes"].as_array().map(Vec::len), Some(2));
+                assert_eq!(runtime["operator_sha256"].as_str().map(str::len), Some(64));
+                assert!(runtime["verified_image_digest"].is_null());
                 return Ok::<_, anyhow::Error>(());
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
