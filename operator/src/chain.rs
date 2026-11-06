@@ -137,9 +137,9 @@ pub async fn run_inference_direct(
 #[debug_job]
 pub async fn run_inference(
     TangleArg(request): TangleArg<InferenceRequest>,
-) -> Result<TangleResult<InferenceResult>, RunnerError> {
+) -> anyhow::Result<TangleResult<InferenceResult>> {
     let endpoint = VLLM_ENDPOINT.get().ok_or_else(|| {
-        RunnerError::Other("vLLM endpoint not registered — InferenceServer not started".into())
+        anyhow::anyhow!("vLLM endpoint not registered — InferenceServer not started")
     })?;
 
     let temperature = request.temperature as f32 / 1000.0;
@@ -161,12 +161,12 @@ pub async fn run_inference(
         .await
         .map_err(|e| {
             tracing::error!(error = %e, "vLLM request failed");
-            RunnerError::Other(format!("vLLM request failed: {e}").into())
+            anyhow::anyhow!("vLLM request failed: {e}")
         })?;
 
     let body: serde_json::Value = resp.json().await.map_err(|e| {
         tracing::error!(error = %e, "vLLM response parse failed");
-        RunnerError::Other(format!("vLLM response parse failed: {e}").into())
+        anyhow::anyhow!("vLLM response parse failed: {e}")
     })?;
 
     let text = body["choices"][0]["message"]["content"]

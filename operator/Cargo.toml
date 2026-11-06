@@ -75,9 +75,5 @@ name = "harness_e2e"
 required-features = ["chain"]
 
 [[test]]
-name = "lifecycle"
-required-features = ["chain"]
-
-[[test]]
 name = "registration"
 required-features = ["chain"]
