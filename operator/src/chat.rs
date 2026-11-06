@@ -37,7 +37,11 @@ impl ChatClient {
         self.process.supervise(shutdown).await
     }
     fn completions_url(&self, model: &str) -> String {
-        self.config.vllm.completions_url_for(model)
+        let base = match self.config.vllm.provider_for(model) {
+            Some(provider) => provider.base_url.trim_end_matches('/').to_string(),
+            None => format!("{}/v1", self.process.endpoint()),
+        };
+        format!("{base}/chat/completions")
     }
     fn authorized(&self, model: &str, builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
         let Some(provider) = self.config.vllm.provider_for(model) else {

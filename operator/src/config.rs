@@ -62,15 +62,6 @@ impl VllmConfig {
             .iter()
             .find(|provider| provider.models.iter().any(|name| name == model))
     }
-    /// Chat-completions URL for `model`. A listed provider wins. Otherwise the
-    /// local server at `host:port` (spawned vLLM, or `external = true`).
-    pub fn completions_url_for(&self, model: &str) -> String {
-        let base = match self.provider_for(model) {
-            Some(provider) => provider.base_url.trim_end_matches('/').to_string(),
-            None => format!("http://{}:{}/v1", self.host, self.port),
-        };
-        format!("{base}/chat/completions")
-    }
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RLNConfig {
