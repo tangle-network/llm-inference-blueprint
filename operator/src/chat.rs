@@ -27,6 +27,9 @@ impl ChatClient {
     pub async fn is_healthy(&self) -> bool {
         self.process.is_healthy().await
     }
+    pub async fn runtime_info(&self) -> anyhow::Result<serde_json::Value> {
+        self.process.runtime_info().await
+    }
     pub async fn shutdown(&self) {
         self.process.shutdown().await;
     }

@@ -1,19 +1,12 @@
-//! vLLM-specific operator configuration.
-//!
-//! Shared infrastructure config (`TangleConfig`, `ServerConfig`, `BillingConfig`,
-//! `GpuConfig`) lives in `tangle-inference-core` and is re-exported here for
-//! convenience.
+//! Model and provider configuration around the core engine.
 use serde::{Deserialize, Serialize};
 use tangle_inference_core::qos::QoSConfig;
 pub use tangle_inference_core::{BillingConfig, GpuConfig, ServerConfig, TangleConfig};
-/// Top-level operator configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OperatorConfig {
     pub tangle: TangleConfig,
-    /// vLLM subprocess + per-token pricing configuration (vllm-specific).
     pub vllm: VllmConfig,
     pub server: ServerConfig,
-    /// Billing / ShieldedCredits configuration (shared).
     pub billing: BillingConfig,
     pub gpu: GpuConfig,
     /// QoS heartbeat configuration (optional — disabled by default).
