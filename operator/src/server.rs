@@ -662,13 +662,13 @@ async fn list_models(State(state): State<AppState>) -> Json<ModelList> {
         data,
     })
 }
-/// Operator info endpoint for discovery. Returns model, pricing, GPU caps, endpoint.
 async fn operator_info(State(state): State<AppState>) -> Json<serde_json::Value> {
     let backend = backend_from(&state);
     let gpu_info = detect_gpus().await.unwrap_or_default();
     Json(serde_json::json!({
         "operator": format!("{:#x}", state.operator_address),
         "model": backend.config.vllm.model,
+        "tee": tangle_inference_core::tee_status(),
         "providers": backend.config.vllm.providers.iter().map(|provider| &provider.name).collect::<Vec<_>>(),
         "pricing": {
             "price_per_input_token": backend.config.vllm.price_per_input_token,
