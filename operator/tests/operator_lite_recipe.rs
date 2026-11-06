@@ -136,21 +136,67 @@ while not os.path.exists(sys.argv[3]) and os.getppid() == parent: server.handle_
                     .send().await?;
                 anyhow::ensure!(response.status().is_success(), "chat did not reach the effective core endpoint: {}", response.status());
                 assert_eq!(response.json::<Value>().await?["id"], "core-endpoint");
-                let info: Value = client.get(format!("http://127.0.0.1:{operator_port}/v1/operator"))
-                    .send().await?.error_for_status()?.json().await?;
-                let runtime = &info["runtime"];
-                assert_eq!(runtime["ready"], true, "operator omitted core runtime facts");
-                assert_eq!(runtime["served_models"], json!(["example/GLM-derivative"]));
-                assert_eq!(runtime["recipe"]["gpu_class"], "nvidia-h200");
-                assert_eq!(runtime["processes"].as_array().map(Vec::len), Some(2));
-                assert_eq!(runtime["operator_sha256"].as_str().map(str::len), Some(64));
-                assert!(runtime["verified_image_digest"].is_null());
                 return Ok::<_, anyhow::Error>(());
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
     })
     .await;
+    let metadata = async {
+        if !matches!(&ready, Ok(Ok(()))) {
+            return Ok::<_, anyhow::Error>(());
+        }
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(30))
+            .build()?;
+        let binary_bytes = std::fs::metadata(env!("CARGO_BIN_EXE_operator-lite"))?.len();
+        for request in 0..2 {
+            let started = std::time::Instant::now();
+            let result = client
+                .get(format!("http://127.0.0.1:{operator_port}/v1/operator"))
+                .send()
+                .await;
+            eprintln!(
+                "METADATA_DIAGNOSTIC={}",
+                json!({"request":request,
+                "elapsed_ms":started.elapsed().as_millis(), "binary_bytes":binary_bytes,
+                "status":result.as_ref().ok().map(|response|response.status().as_u16())})
+            );
+            let info: Value = result?.error_for_status()?.json().await?;
+            let runtime = &info["runtime"];
+            assert_eq!(
+                runtime["ready"], true,
+                "operator omitted core runtime facts"
+            );
+            assert_eq!(runtime["served_models"], json!(["example/GLM-derivative"]));
+            assert_eq!(runtime["recipe"]["gpu_class"], "nvidia-h200");
+            assert_eq!(runtime["processes"].as_array().map(Vec::len), Some(2));
+            assert_eq!(runtime["operator_sha256"].as_str().map(str::len), Some(64));
+            assert!(runtime["verified_image_digest"].is_null());
+        }
+        Ok(())
+    }
+    .await;
+    let started = std::time::Instant::now();
+    let query = tokio::process::Command::new("nvidia-smi").args([
+        "--query-gpu=index,name,memory.total,memory.used,memory.free,temperature.gpu,utilization.gpu,driver_version",
+        "--format=csv,noheader,nounits",
+    ]).stdout(Stdio::null()).stderr(Stdio::null()).kill_on_drop(true).spawn();
+    let query_status = match query {
+        Ok(mut child) => match tokio::time::timeout(Duration::from_secs(5), child.wait()).await {
+            Ok(status) => format!("{status:?}"),
+            Err(_) => {
+                child.kill().await?;
+                child.wait().await?;
+                "timeout".into()
+            }
+        },
+        Err(error) => format!("{:?}", error.kind()),
+    };
+    eprintln!(
+        "GPU_QUERY_DIAGNOSTIC={}",
+        json!({"elapsed_ms":started.elapsed().as_millis(), "status":query_status})
+    );
     if operator.try_wait()?.is_none() {
         if let Some(pid) = operator.id() {
             tokio::process::Command::new("kill")
@@ -162,6 +208,7 @@ while not os.path.exists(sys.argv[3]) and os.getppid() == parent: server.handle_
     let stopped = tokio::time::timeout(Duration::from_secs(8), operator.wait()).await;
     std::fs::write(&stop_path, b"stop")?;
     ready??;
+    metadata?;
     assert!(stopped??.success());
     let argv: Vec<String> = serde_json::from_slice(&std::fs::read(argv_path)?)?;
     assert!(argv
