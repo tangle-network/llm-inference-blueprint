@@ -24,8 +24,7 @@ contract Deploy is Script {
             uint64(vm.parseJsonUint(config, ".vllm.price_per_output_token")),
             uint32(vm.parseJsonUint(config, ".gpu.min_vram_mib"))
         );
-        console2.log("DEPLOY_INFERENCE_BSM_IMPL=%s", vm.toString(address(implementation)));
         vm.stopBroadcast();
-        console2.log("DEPLOY_INFERENCE_BSM_PROXY=%s", vm.toString(manager));
+        console2.log("DEPLOY_MANAGER=%s", vm.toString(manager));
     }
 }
