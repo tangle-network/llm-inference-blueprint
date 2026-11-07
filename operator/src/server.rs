@@ -13,7 +13,6 @@ use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::sync::Mutex;
 use std::time::Duration;
 use tangle_inference_core::payment::PaymentProof;
 use tangle_inference_core::server::{
@@ -35,8 +34,6 @@ pub struct VllmBackend {
     pub config: Arc<OperatorConfig>,
     pub vllm: Arc<ChatClient>,
     pub cost_model: PerTokenCostModel,
-    /// Handles of spawned settlement tasks, drained on shutdown.
-    pub pending_settlements: Mutex<Vec<JoinHandle<()>>>,
     usage: UsageLedger,
 }
 /// Totals behind `GET /v1/usage`. The per-response `usage` object is unchanged.
@@ -71,7 +68,6 @@ impl VllmBackend {
             config,
             vllm,
             cost_model,
-            pending_settlements: Mutex::new(Vec::new()),
             usage: UsageLedger::new(),
         }
     }
@@ -86,18 +82,6 @@ impl VllmBackend {
             self.usage.prompt_tokens.load(Ordering::Relaxed),
             self.usage.completion_tokens.load(Ordering::Relaxed),
         )
-    }
-    pub fn track_settlement(&self, handle: JoinHandle<()>) {
-        if let Ok(mut handles) = self.pending_settlements.lock() {
-            handles.retain(|h| !h.is_finished());
-            handles.push(handle);
-        }
-    }
-    pub fn drain_settlements(&self) -> Vec<JoinHandle<()>> {
-        self.pending_settlements
-            .lock()
-            .map(|mut h| h.drain(..).collect())
-            .unwrap_or_default()
     }
     pub fn calculate_cost(&self, prompt_tokens: u32, completion_tokens: u32) -> u64 {
         self.cost_model.calculate_cost(&CostParams {
@@ -150,20 +134,8 @@ pub async fn start(
         {
             tracing::error!(error = %e, "HTTP server error");
         }
-        if let Some(backend) = state_for_drain.backend::<VllmBackend>() {
-            let handles = backend.drain_settlements();
-            if !handles.is_empty() {
-                tracing::info!(
-                    count = handles.len(),
-                    "draining pending settlements before shutdown"
-                );
-                let _ = tokio::time::timeout(
-                    Duration::from_secs(30),
-                    futures_util::future::join_all(handles),
-                )
-                .await;
-            }
-        }
+        let _ = tokio::time::timeout(Duration::from_secs(30), state_for_drain.drain_settlements())
+            .await;
     });
     Ok(handle)
 }
@@ -413,11 +385,10 @@ async fn handle_non_streaming(
             vllm_response.usage.prompt_tokens,
             vllm_response.usage.completion_tokens,
         );
-        let state = state.clone();
-        let handle = tokio::spawn(async move {
-            settle_request(&state, &auth, Some(actual_cost)).await;
-        });
-        backend.track_settlement(handle);
+        let settling = state.clone();
+        state.spawn_settlement(
+            async move { settle_request(&settling, &auth, Some(actual_cost)).await },
+        );
     }
     Json(vllm_response).into_response()
 }
@@ -565,7 +536,7 @@ async fn handle_streaming(
         })
     };
     let body = Body::from_stream(proxied_stream);
-    let settlement_handle = tokio::spawn(async move {
+    state.spawn_settlement(async move {
         // Guard that logs if this future is cancelled mid-flight (e.g. on shutdown).
         struct SettlementDropGuard(bool);
         impl Drop for SettlementDropGuard {
@@ -610,8 +581,6 @@ async fn handle_streaming(
         drop_guard.0 = true;
         drop(permit);
     });
-    // Track for graceful shutdown drain.
-    backend.track_settlement(settlement_handle);
     Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "text/event-stream")
