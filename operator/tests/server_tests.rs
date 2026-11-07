@@ -110,6 +110,8 @@ async fn start_billing_required_server(
 ) -> (u16, tokio::sync::watch::Sender<bool>, JoinHandle<()>) {
     let mut config = test_config(vllm_port);
     config.billing.billing_required = true;
+    // Core refuses required billing with no rail, so this server takes SpendAuth like a real one.
+    config.billing.payment_rails = PaymentRails::SHIELDED;
     start_configured_server(config).await
 }
 
