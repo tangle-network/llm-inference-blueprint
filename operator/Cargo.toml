@@ -43,7 +43,7 @@ regex = "1"
 unicode-normalization = "0.1"
 
 # Shared inference operator infrastructure (billing, metrics, health, server helpers).
-tangle-inference-core = { git = "https://github.com/tangle-network/tangle-inference-core", rev = "7edf6fe790f67dedbdefeb4899be19f0b40bfbb7", default-features = false, features = ["billing", "http", "metrics"] }
+tangle-inference-core = { git = "https://github.com/tangle-network/tangle-inference-core", rev = "aacaec4387122293ac5f9e3d9477380ee7afd94f", default-features = false, features = ["billing", "http", "metrics"] }
 
 # Web framework (for OpenAI-compatible HTTP server)
 axum = { version = "0.7", features = ["json", "macros"] }
