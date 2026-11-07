@@ -64,6 +64,7 @@ fn test_config(vllm_port: u16) -> OperatorConfig {
             max_gas_price_gwei: 0,
             nonce_store_path: None,
             settlement_journal_path: None,
+            receipt_timeout_secs: 60,
             direct_replay_store_path: None,
             payment_token_address: None,
         },
