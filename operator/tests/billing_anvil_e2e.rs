@@ -212,8 +212,8 @@ impl Chain {
             .unwrap();
         json!({
             "commitment": format!("{:#x}", account.commitment),
-            "service_id": SERVICE_ID,
-            "job_index": 0,
+            "serviceId": SERVICE_ID,
+            "jobIndex": 0,
             "amount": PREAUTH.to_string(),
             "operator": format!("{:#x}", self.operator),
             "nonce": nonce,
@@ -354,7 +354,11 @@ async fn paid_chat(url: &str, content: &str, spend_auth: Value) -> anyhow::Resul
         .send()
         .await?;
     let status = response.status().as_u16();
-    Ok((status, response.json().await.unwrap_or(Value::Null)))
+    let text = response.text().await?;
+    Ok((
+        status,
+        serde_json::from_str(&text).unwrap_or(Value::String(text)),
+    ))
 }
 
 /// The charge for a served chat: its reported usage at the configured per-token prices.
