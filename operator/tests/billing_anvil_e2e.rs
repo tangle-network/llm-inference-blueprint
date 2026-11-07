@@ -434,6 +434,7 @@ async fn killed_operator_process_settles_paid_chats_exactly_once_on_anvil() -> a
     });
     let config_path = dir.path().join("config.json");
     std::fs::write(&config_path, serde_json::to_vec(&config)?)?;
+    let journal = journal.with_extension(format!("{SERVICE_ID}.{:#x}.jsonl", chain.operator));
 
     // One paid chat: the operator is paid its usage cost and the payer refunded the rest.
     let first = start_operator(dir.path(), &config_path, "first").await?;
