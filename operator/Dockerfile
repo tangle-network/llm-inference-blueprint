@@ -17,7 +17,7 @@ ARG CORE_REVISION
 LABEL org.opencontainers.image.source="https://github.com/tangle-network/llm-inference-blueprint" org.opencontainers.image.revision=$VCS_REF org.opencontainers.image.base.name=$ENGINE_IMAGE tools.tangle.inference-core.revision=$CORE_REVISION
 USER root
 COPY --from=operator-lite-builder /out/operator-lite /usr/local/bin/operator-lite
-RUN test -n "$VCS_REF" && test -n "$CORE_REVISION" && groupadd -f operator && useradd -m -g operator -s /bin/bash operator && install -d -o operator -g operator /home/operator/.cache/huggingface /home/operator/state
+RUN test -n "$VCS_REF" && test -n "$CORE_REVISION" && groupadd -f operator && useradd -m -g operator -s /bin/bash operator && install -d -o operator -g operator /home/operator/.cache /home/operator/.cache/huggingface /home/operator/state
 USER operator
 WORKDIR /home/operator
 EXPOSE 8080
